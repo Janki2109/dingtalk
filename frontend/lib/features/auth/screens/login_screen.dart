@@ -18,7 +18,6 @@ class _LoginScreenState extends State<LoginScreen> {
   final _deptCtrl = TextEditingController(text: 'Engineering');
   bool _showPass = false;
   bool _isRegister = false;
-  String _selectedRole = 'employee'; // 'admin' or 'employee'
 
   @override
   void dispose() {
@@ -97,173 +96,39 @@ class _LoginScreenState extends State<LoginScreen> {
                           icon: Icons.business_outlined),
                       const SizedBox(height: 14),
 
-                      // Role selector
-                      const Text('Account Type',
-                          style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.textSecondary)),
-                      const SizedBox(height: 8),
-                      Row(children: [
-                        // Admin option
-                        Expanded(
-                            child: GestureDetector(
-                          onTap: () => setState(() => _selectedRole = 'admin'),
-                          child: Container(
-                            padding: const EdgeInsets.all(14),
-                            decoration: BoxDecoration(
-                                color: _selectedRole == 'admin'
-                                    ? const Color(0xFF7C4DFF).withOpacity(0.1)
-                                    : AppColors.surfaceVar,
-                                borderRadius: BorderRadius.circular(14),
-                                border: Border.all(
-                                    color: _selectedRole == 'admin'
-                                        ? const Color(0xFF7C4DFF)
-                                        : AppColors.border,
-                                    width: _selectedRole == 'admin' ? 2 : 1)),
-                            child: Column(children: [
-                              Container(
-                                  width: 44,
-                                  height: 44,
-                                  decoration: BoxDecoration(
-                                      color: _selectedRole == 'admin'
-                                          ? const Color(0xFF7C4DFF)
-                                              .withOpacity(0.15)
-                                          : AppColors.border.withOpacity(0.3),
-                                      shape: BoxShape.circle),
-                                  child: Icon(Icons.admin_panel_settings,
-                                      color: _selectedRole == 'admin'
-                                          ? const Color(0xFF7C4DFF)
-                                          : AppColors.textMuted,
-                                      size: 22)),
-                              const SizedBox(height: 8),
-                              Text('Admin',
-                                  style: TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w700,
-                                      color: _selectedRole == 'admin'
-                                          ? const Color(0xFF7C4DFF)
-                                          : AppColors.textSecondary)),
-                              const SizedBox(height: 2),
-                              Text('Full access',
-                                  style: const TextStyle(
-                                      fontSize: 10, color: AppColors.textMuted),
-                                  textAlign: TextAlign.center),
-                              if (_selectedRole == 'admin') ...[
-                                const SizedBox(height: 6),
-                                Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 8, vertical: 3),
-                                    decoration: BoxDecoration(
-                                        color: const Color(0xFF7C4DFF),
-                                        borderRadius:
-                                            BorderRadius.circular(10)),
-                                    child: const Text('Selected',
-                                        style: TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.w700))),
-                              ],
-                            ]),
-                          ),
-                        )),
-                        const SizedBox(width: 12),
-
-                        // Employee option
-                        Expanded(
-                            child: GestureDetector(
-                          onTap: () =>
-                              setState(() => _selectedRole = 'employee'),
-                          child: Container(
-                            padding: const EdgeInsets.all(14),
-                            decoration: BoxDecoration(
-                                color: _selectedRole == 'employee'
-                                    ? AppColors.primary.withOpacity(0.1)
-                                    : AppColors.surfaceVar,
-                                borderRadius: BorderRadius.circular(14),
-                                border: Border.all(
-                                    color: _selectedRole == 'employee'
-                                        ? AppColors.primary
-                                        : AppColors.border,
-                                    width:
-                                        _selectedRole == 'employee' ? 2 : 1)),
-                            child: Column(children: [
-                              Container(
-                                  width: 44,
-                                  height: 44,
-                                  decoration: BoxDecoration(
-                                      color: _selectedRole == 'employee'
-                                          ? AppColors.primary.withOpacity(0.15)
-                                          : AppColors.border.withOpacity(0.3),
-                                      shape: BoxShape.circle),
-                                  child: Icon(Icons.person,
-                                      color: _selectedRole == 'employee'
-                                          ? AppColors.primary
-                                          : AppColors.textMuted,
-                                      size: 22)),
-                              const SizedBox(height: 8),
-                              Text('Employee',
-                                  style: TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w700,
-                                      color: _selectedRole == 'employee'
-                                          ? AppColors.primary
-                                          : AppColors.textSecondary)),
-                              const SizedBox(height: 2),
-                              const Text('Standard access',
-                                  style: TextStyle(
-                                      fontSize: 10, color: AppColors.textMuted),
-                                  textAlign: TextAlign.center),
-                              if (_selectedRole == 'employee') ...[
-                                const SizedBox(height: 6),
-                                Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 8, vertical: 3),
-                                    decoration: BoxDecoration(
-                                        color: AppColors.primary,
-                                        borderRadius:
-                                            BorderRadius.circular(10)),
-                                    child: const Text('Selected',
-                                        style: TextStyle(
-                                            color: Colors.white,
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.w700))),
-                              ],
-                            ]),
-                          ),
-                        )),
-                      ]),
-
-                      // Role description
-                      const SizedBox(height: 10),
+                      // Employee info box
                       Container(
-                        padding: const EdgeInsets.all(10),
+                        padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
-                            color: (_selectedRole == 'admin'
-                                    ? const Color(0xFF7C4DFF)
-                                    : AppColors.primary)
-                                .withOpacity(0.08),
-                            borderRadius: BorderRadius.circular(10)),
+                            color: AppColors.primary.withOpacity(0.08),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                                color: AppColors.primary.withOpacity(0.2))),
                         child: Row(children: [
-                          Icon(
-                              _selectedRole == 'admin'
-                                  ? Icons.admin_panel_settings
-                                  : Icons.person,
-                              size: 14,
-                              color: _selectedRole == 'admin'
-                                  ? const Color(0xFF7C4DFF)
-                                  : AppColors.primary),
-                          const SizedBox(width: 8),
-                          Expanded(
-                              child: Text(
-                                  _selectedRole == 'admin'
-                                      ? 'Admin: Assign tasks, approve leave, manage attendance & meetings'
-                                      : 'Employee: View tasks, check in, apply leave, join meetings',
-                                  style: TextStyle(
-                                      fontSize: 11,
-                                      color: _selectedRole == 'admin'
-                                          ? const Color(0xFF7C4DFF)
-                                          : AppColors.primary))),
+                          Container(
+                              width: 36,
+                              height: 36,
+                              decoration: BoxDecoration(
+                                  color: AppColors.primary.withOpacity(0.15),
+                                  shape: BoxShape.circle),
+                              child: const Icon(Icons.person,
+                                  color: AppColors.primary, size: 20)),
+                          const SizedBox(width: 10),
+                          const Expanded(
+                              child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                Text('Employee Account',
+                                    style: TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w700,
+                                        color: AppColors.primary)),
+                                Text(
+                                    'View tasks, check in, apply leave, join meetings',
+                                    style: TextStyle(
+                                        fontSize: 11,
+                                        color: AppColors.textMuted)),
+                              ])),
                         ]),
                       ),
                       const SizedBox(height: 14),
@@ -341,7 +206,6 @@ class _LoginScreenState extends State<LoginScreen> {
                         child: GestureDetector(
                       onTap: () => setState(() {
                         _isRegister = !_isRegister;
-                        _selectedRole = 'employee';
                       }),
                       child: RichText(
                           text: TextSpan(
@@ -388,7 +252,6 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _submit() async {
-    // Validate
     if (_emailCtrl.text.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Please enter your email'),
@@ -415,24 +278,19 @@ class _LoginScreenState extends State<LoginScreen> {
     bool ok;
 
     if (_isRegister) {
+      // Always register as Employee
       ok = await auth.register(
         _nameCtrl.text.trim(),
         _emailCtrl.text.trim(),
         _passwordCtrl.text,
-        _selectedRole == 'admin' ? 'Administrator' : 'Employee',
+        'Employee',
         _deptCtrl.text.trim(),
       );
-
-      // After register — also update user_role in DB
-      if (ok && _selectedRole == 'admin') {
-        // Backend register sets user_role based on role field
-      }
     } else {
       ok = await auth.login(_emailCtrl.text.trim(), _passwordCtrl.text);
     }
 
     if (ok && mounted) {
-      // Navigate based on role
       final user = auth.user;
       if (user != null && user.isAdmin) {
         Navigator.of(context).pushAndRemoveUntil(

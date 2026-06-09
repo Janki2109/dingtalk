@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../core/theme/app_theme.dart';
@@ -6,7 +7,7 @@ import '../../../data/services/api_service.dart';
 import '../../../data/services/auth_provider.dart';
 import '../../../shared/widgets/app_widgets.dart';
 
-// Shared storage for todo submissions (in production save to DB)
+// Shared in-memory store (also backed by DB now)
 class TodoStore {
   static final List<Map<String, dynamic>> submissions = [];
 }
@@ -21,29 +22,33 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tab;
   List<UserModel> _employees = [];
+  List<Map<String, dynamic>> _workReports = [];
   bool _loading = true;
+  Timer? _refreshTimer;
 
   @override
   void initState() {
     super.initState();
     _tab = TabController(length: 2, vsync: this);
     _load();
-    // Auto-refresh every 10 seconds
-    Future.doWhile(() async {
-      await Future.delayed(const Duration(seconds: 10));
-      if (!mounted) return false;
-      await _load();
-      return mounted;
+    // Auto-refresh every 5 seconds
+    _refreshTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (mounted) _loadWorkReports();
     });
   }
 
   @override
   void dispose() {
     _tab.dispose();
+    _refreshTimer?.cancel();
     super.dispose();
   }
 
   Future<void> _load() async {
+    await Future.wait([_loadEmployees(), _loadWorkReports()]);
+  }
+
+  Future<void> _loadEmployees() async {
     try {
       final users = await ApiService.getUsers();
       if (mounted)
@@ -54,6 +59,54 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen>
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
+  }
+
+  Future<void> _loadWorkReports() async {
+    try {
+      final approvals = await ApiService.getApprovals();
+      if (mounted) {
+        setState(() {
+          _workReports = approvals
+              .where((a) => a.approvalType == 'work_report')
+              .map((a) => {
+                    'id': a.id,
+                    'employee': a.title.replaceAll('Work Report - ', ''),
+                    'date': _fmtDate(a.createdAt),
+                    'tasks': a.description.split('\n'),
+                    'acknowledged': a.status == 'approved',
+                    'submittedAt': a.createdAt.toIso8601String(),
+                    'approvalId': a.id,
+                  })
+              .toList();
+          // Also add in-memory ones not in DB
+          for (final s in TodoStore.submissions) {
+            if (!_workReports.any((r) =>
+                r['employee'] == s['employee'] && r['date'] == s['date'])) {
+              _workReports.insert(0, s);
+            }
+          }
+        });
+      }
+    } catch (_) {}
+  }
+
+  String _fmtDate(DateTime dt) {
+    const mo = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec'
+    ];
+    const da = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    return '${da[dt.weekday - 1]}, ${mo[dt.month - 1]} ${dt.day}';
   }
 
   void _viewTodo(Map<String, dynamic> s) {
@@ -87,7 +140,7 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen>
                       Text(s['employee'],
                           style: const TextStyle(
                               fontSize: 17, fontWeight: FontWeight.w700)),
-                      Text('${s['date']} · Out: ${s['checkOut']}',
+                      Text(s['date'],
                           style: const TextStyle(
                               fontSize: 12, color: AppColors.textMuted)),
                     ])),
@@ -170,9 +223,16 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen>
               const SizedBox(width: 12),
               Expanded(
                   child: ElevatedButton.icon(
-                onPressed: () {
+                onPressed: () async {
                   Navigator.pop(context);
                   setState(() => s['acknowledged'] = true);
+                  // Update in DB if has approvalId
+                  if (s['approvalId'] != null) {
+                    try {
+                      await ApiService.updateApprovalStatus(
+                          s['approvalId'], 'approved');
+                    } catch (_) {}
+                  }
                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                     content: Text('✅ Work report acknowledged!'),
                     backgroundColor: AppColors.online,
@@ -197,8 +257,8 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen>
     final now = DateTime.now();
     final present = _employees.where((e) => e.status == 'online').length;
     final absent = _employees.length - present;
-    final todos = TodoStore.submissions;
-    final newTodos = todos.where((t) => t['acknowledged'] != true).length;
+    final newReports =
+        _workReports.where((t) => t['acknowledged'] != true).length;
 
     return Scaffold(
       backgroundColor: AppColors.bg,
@@ -223,8 +283,8 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen>
             const Tab(text: 'Attendance'),
             Tab(
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
-              const Text('To-Do Lists'),
-              if (newTodos > 0) ...[
+              const Text('Work Reports'),
+              if (newReports > 0) ...[
                 const SizedBox(width: 6),
                 Container(
                   padding:
@@ -232,7 +292,7 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen>
                   decoration: BoxDecoration(
                       color: AppColors.busy,
                       borderRadius: BorderRadius.circular(10)),
-                  child: Text('$newTodos',
+                  child: Text('$newReports',
                       style: const TextStyle(
                           color: Colors.white,
                           fontSize: 10,
@@ -248,7 +308,6 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen>
           : TabBarView(controller: _tab, children: [
               // ── Attendance Tab ─────────────────────────────────────────
               Column(children: [
-                // Summary card
                 Container(
                   margin: const EdgeInsets.all(16),
                   padding: const EdgeInsets.all(20),
@@ -280,8 +339,6 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen>
                     Expanded(child: _Sum('Absent', '$absent', Colors.white)),
                   ]),
                 ),
-
-                // Present label
                 if (present > 0)
                   Padding(
                       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
@@ -311,8 +368,6 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen>
                                 fontWeight: FontWeight.w700,
                                 color: AppColors.busy)),
                       ])),
-
-                // Employee list
                 Expanded(
                     child: ListView.builder(
                   padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -383,8 +438,8 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen>
                 )),
               ]),
 
-              // ── To-Do Lists Tab ────────────────────────────────────────
-              todos.isEmpty
+              // ── Work Reports Tab ───────────────────────────────────────
+              _workReports.isEmpty
                   ? Center(
                       child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
@@ -407,9 +462,9 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen>
                         ]))
                   : ListView.builder(
                       padding: const EdgeInsets.all(16),
-                      itemCount: todos.length,
+                      itemCount: _workReports.length,
                       itemBuilder: (ctx, i) {
-                        final s = todos[i];
+                        final s = _workReports[i];
                         final acknowledged = s['acknowledged'] == true;
                         return GestureDetector(
                           onTap: () => _viewTodo(s),
@@ -452,8 +507,7 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen>
                                                 color: AppColors.busy)),
                                       ],
                                     ]),
-                                    Text(
-                                        '${s['date']} · Checked out: ${s['checkOut']}',
+                                    Text(s['date'],
                                         style: const TextStyle(
                                             fontSize: 11,
                                             color: AppColors.textMuted)),
@@ -474,7 +528,7 @@ class _AdminAttendanceScreenState extends State<AdminAttendanceScreen>
                                           ? AppColors.online.withOpacity(0.1)
                                           : AppColors.primary.withOpacity(0.1),
                                       borderRadius: BorderRadius.circular(20)),
-                                  child: Text(acknowledged ? '✅ Done' : 'View',
+                                  child: Text(acknowledged ? '✅ Done' : 'New',
                                       style: TextStyle(
                                           fontSize: 12,
                                           color: acknowledged

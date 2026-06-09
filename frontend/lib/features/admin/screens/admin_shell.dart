@@ -73,43 +73,47 @@ class _AdminShellState extends State<AdminShell> {
         ),
         child: SafeArea(
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: List.generate(_screens.length, (i) {
                 final selected = _index == i;
-                return GestureDetector(
-                  onTap: () => setState(() => _index = i),
-                  behavior: HitTestBehavior.opaque,
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: selected
-                          ? themeColor.withOpacity(0.12)
-                          : Colors.transparent,
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          selected ? _selectedIcons[i] : _icons[i],
-                          color: selected ? themeColor : AppColors.textMuted,
-                          size: 24,
-                        ),
-                        const SizedBox(height: 3),
-                        Text(
-                          _labels[i],
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight:
-                                selected ? FontWeight.w700 : FontWeight.w400,
+                return Expanded(
+                  child: GestureDetector(
+                    onTap: () => setState(() => _index = i),
+                    behavior: HitTestBehavior.opaque,
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 4, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: selected
+                            ? themeColor.withOpacity(0.12)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            selected ? _selectedIcons[i] : _icons[i],
                             color: selected ? themeColor : AppColors.textMuted,
+                            size: 22,
                           ),
-                        ),
-                      ],
+                          const SizedBox(height: 2),
+                          Text(
+                            _labels[i],
+                            style: TextStyle(
+                              fontSize: 9,
+                              fontWeight:
+                                  selected ? FontWeight.w700 : FontWeight.w400,
+                              color:
+                                  selected ? themeColor : AppColors.textMuted,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 );

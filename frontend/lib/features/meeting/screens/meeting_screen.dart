@@ -5,7 +5,6 @@ import '../../../core/theme/app_theme.dart';
 import '../../../data/models/app_models.dart';
 import '../../../data/services/api_service.dart';
 import '../../../data/services/auth_provider.dart';
-import '../../../shared/widgets/app_widgets.dart';
 import 'meeting_room_screen.dart';
 
 class MeetingScreen extends StatefulWidget {

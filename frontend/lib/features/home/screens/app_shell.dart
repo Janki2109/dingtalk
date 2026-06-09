@@ -4,8 +4,8 @@ import '../../../core/theme/app_theme.dart';
 import '../../../data/services/auth_provider.dart';
 import '../../chat/screens/chat_list_screen.dart';
 import '../../attendance/screens/attendance_screen.dart';
-import '../../tasks/screens/tasks_screen.dart';
 import '../../profile/screens/profile_screen.dart';
+import '../../tasks/screens/tasks_screen.dart';
 import '../../meeting/screens/meeting_screen.dart';
 
 class AppShell extends StatefulWidget {
@@ -17,12 +17,12 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell> {
   int _index = 0;
 
-  final _screens = const [
-    ChatListScreen(),
-    MeetingScreen(),
-    AttendanceScreen(),
-    TasksScreen(),
-    ProfileScreen(),
+  final _screens = [
+    const ChatListScreen(),
+    const MeetingScreen(),
+    const AttendanceScreen(),
+    const TasksScreen(),
+    const ProfileScreen(),
   ];
 
   final _labels = ['Messages', 'Meetings', 'Attendance', 'Tasks', 'Profile'];

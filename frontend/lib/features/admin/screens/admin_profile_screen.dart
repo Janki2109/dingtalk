@@ -7,14 +7,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:file_picker/file_picker.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../core/constants/app_constants.dart';
-import '../../../data/models/app_models.dart';
 import '../../../data/services/api_service.dart';
 import '../../../data/services/auth_provider.dart';
-import '../../../shared/widgets/app_widgets.dart';
 import '../../contacts/screens/contacts_screen.dart';
 import '../../files/screens/files_screen.dart';
 import '../../auth/screens/login_screen.dart';
-import '../../profile/screens/profile_screen.dart';
+// Import only AIChatScreen from profile_screen using a prefix to avoid conflicts
+import '../../profile/screens/profile_screen.dart' as profile_lib;
 
 class AdminProfileScreen extends StatefulWidget {
   const AdminProfileScreen({super.key});
@@ -266,7 +265,7 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                 label: 'AI Assistant',
                 color: AppColors.purple,
                 onTap: () => Navigator.push(context,
-                    MaterialPageRoute(builder: (_) => const AIChatScreen()))),
+                    MaterialPageRoute(builder: (_) => profile_lib.AIChatScreen()))),
           ]),
 
           // Account
@@ -660,7 +659,7 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
   }
 }
 
-// ── Theme Sheet ────────────────────────────────────────────────────────────────
+// ── Theme Sheet ───────────────────────────────────────────────────────────────
 class _ThemeSheet extends StatefulWidget {
   final AuthProvider auth;
   const _ThemeSheet({required this.auth});

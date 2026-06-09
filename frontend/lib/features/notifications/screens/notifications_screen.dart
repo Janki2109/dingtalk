@@ -225,7 +225,7 @@ class _NotifTile extends StatelessWidget {
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
                   Icon(Icons.tag_rounded, size: 12, color: color),
                   const SizedBox(width: 4),
-                  Text(code!,
+                  Text(code,
                       style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800,
                           letterSpacing: 2, color: color)),
                 ]),
