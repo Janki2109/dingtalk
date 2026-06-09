@@ -1,0 +1,18 @@
+# Backend
+backend/.env
+backend/dingtalk_server
+backend/dingtalk_server.exe
+backend/*.exe
+backend/*.exe~
+
+# Frontend
+frontend/.dart_tool/
+frontend/build/
+frontend/.flutter-plugins
+frontend/.flutter-plugins-dependencies
+frontend/pubspec.lock
+
+# General
+.DS_Store
+*.log
+node_modules/
