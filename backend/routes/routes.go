@@ -57,7 +57,6 @@ func Setup(db *sql.DB) http.Handler {
 	protected.HandleFunc("POST   /api/meetings/{id}/invite", meet.InviteParticipants)
 	protected.HandleFunc("GET    /api/meetings/{id}/participants", meet.GetParticipants)
 	protected.HandleFunc("DELETE /api/meetings/{id}/participants/{userId}", meet.RemoveParticipant)
-	protected.HandleFunc("GET    /api/meetings/bycode/{code}", meet.GetMeetingByCode)
 
 	// Tasks
 	protected.HandleFunc("GET   /api/tasks", task.GetTasks)
@@ -110,7 +109,11 @@ func Setup(db *sql.DB) http.Handler {
 	mux.Handle("/api/files", middleware.Auth(protected))
 	mux.Handle("/api/files/", middleware.Auth(protected))
 	mux.Handle("/api/upload", middleware.Auth(protected))
-	mux.Handle("/api/meetings/bycode/", middleware.Auth(protected))
+
+	// Meeting by code — registered directly to avoid route conflict
+	mux.HandleFunc("GET /api/meetings/bycode/{code}", func(w http.ResponseWriter, r *http.Request) {
+		middleware.Auth(http.HandlerFunc(meet.GetMeetingByCode)).ServeHTTP(w, r)
+	})
 
 	// Serve uploaded files (no auth required — URLs are unguessable by timestamp)
 	mux.Handle("/uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir("uploads"))))
