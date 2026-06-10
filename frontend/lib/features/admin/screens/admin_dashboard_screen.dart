@@ -17,37 +17,35 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   List<ApprovalModel> _pending = [];
   List<TaskModel> _tasks = [];
   bool _loading = true;
+  String? _error;
 
   @override
   void initState() {
     super.initState();
-    _load();
+    // ✅ Use addPostFrameCallback so AuthProvider is ready
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
   Future<void> _load() async {
-    setState(() => _loading = true);
+    if (!mounted) return;
+    setState(() { _loading = true; _error = null; });
     try {
-      final results = await Future.wait([
-        ApiService.getUsers(),
-        ApiService.getApprovals(),
-        ApiService.getTasks(),
-      ]);
-      if (mounted) {
-        // ✅ FIX: Show all users except current admin
-        final currentId = context.read<AuthProvider>().user?.id ?? '';
-        setState(() {
-          _employees = (results[0] as List<UserModel>)
-              .where((u) => u.id != currentId)
-              .toList();
-          _pending = (results[1] as List<ApprovalModel>)
-              .where((a) => a.status == 'pending')
-              .toList();
-          _tasks = results[2] as List<TaskModel>;
-          _loading = false;
-        });
-      }
-    } catch (_) {
-      if (mounted) setState(() => _loading = false);
+      final users = await ApiService.getUsers();
+      final approvals = await ApiService.getApprovals();
+      final tasks = await ApiService.getTasks();
+      if (!mounted) return;
+      setState(() {
+        _employees = users;
+        _pending = approvals.where((a) => a.status == 'pending').toList();
+        _tasks = tasks;
+        _loading = false;
+      });
+    } catch (e) {
+      debugPrint('Dashboard error: $e');
+      if (mounted) setState(() {
+        _loading = false;
+        _error = e.toString().replaceAll('Exception: ', '');
+      });
     }
   }
 
@@ -137,7 +135,30 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                 ? const Padding(
                     padding: EdgeInsets.all(40),
                     child: Center(child: CircularProgressIndicator()))
-                : Column(children: [
+                : _error != null
+                    ? Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(children: [
+                          const Icon(Icons.wifi_off_rounded,
+                              size: 56, color: AppColors.busy),
+                          const SizedBox(height: 12),
+                          const Text('Could not load data',
+                              style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.textPrimary)),
+                          const SizedBox(height: 6),
+                          Text(_error!,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                  fontSize: 12, color: AppColors.textMuted)),
+                          const SizedBox(height: 16),
+                          ElevatedButton.icon(
+                              onPressed: _load,
+                              icon: const Icon(Icons.refresh),
+                              label: const Text('Retry')),
+                        ]))
+                    : Column(children: [
                     const SizedBox(height: 16),
 
                     // Stats

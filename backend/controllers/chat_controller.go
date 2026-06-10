@@ -323,4 +323,37 @@ func (c *ChatController) AIChat(w http.ResponseWriter, r *http.Request) {
 	utils.OK(w, models.AIChatResponse{Reply: reply})
 }
 
+func (c *ChatController) DeleteChat(w http.ResponseWriter, r *http.Request) {
+	userID := r.Header.Get("X-User-ID")
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	chatID := ""
+	for i, p := range parts {
+		if p == "chats" && i+1 < len(parts) {
+			chatID = parts[i+1]
+			break
+		}
+	}
+	if chatID == "" {
+		utils.BadRequest(w, "missing chat id")
+		return
+	}
+
+	var userRole string
+	c.DB.QueryRow(`SELECT COALESCE(user_role,'employee') FROM users WHERE id=$1`, userID).Scan(&userRole)
+
+	var memberCount int
+	c.DB.QueryRow(`SELECT COUNT(*) FROM chat_members WHERE chat_id=$1 AND user_id=$2`, chatID, userID).Scan(&memberCount)
+
+	if memberCount == 0 && userRole != "admin" {
+		utils.Error(w, http.StatusForbidden, "not authorized to delete this chat")
+		return
+	}
+
+	c.DB.Exec(`DELETE FROM messages WHERE chat_id=$1`, chatID)
+	c.DB.Exec(`DELETE FROM chat_members WHERE chat_id=$1`, chatID)
+	c.DB.Exec(`DELETE FROM chats WHERE id=$1`, chatID)
+
+	utils.OK(w, map[string]string{"message": "chat deleted"})
+}
+
 func formatChatTime(t time.Time) string { return t.Format("2006-01-02 15:04:05") }

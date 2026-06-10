@@ -154,6 +154,19 @@ class ApiService {
   static Future<void> markChatRead(String chatId) =>
       _patch('/chats/$chatId/read', {});
 
+  static Future<void> deleteChat(String chatId) async {
+    final token = await getToken();
+    final r = await http.delete(
+      Uri.parse('$_base/chats/$chatId'),
+      headers: {
+        'Content-Type': 'application/json',
+        if (token != null) 'Authorization': 'Bearer $token',
+      },
+    ).timeout(const Duration(seconds: 10));
+    if (r.statusCode >= 400)
+      throw Exception('Failed to delete chat: ${r.statusCode}');
+  }
+
   static Future<String> aiChat(String userId, String message) async {
     final d = await _post('/chat/ai', {'user_id': userId, 'message': message});
     return d['reply'] ?? '';

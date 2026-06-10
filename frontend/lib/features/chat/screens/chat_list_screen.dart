@@ -97,15 +97,15 @@ class _ChatListScreenState extends State<ChatListScreen> {
                   borderRadius: BorderRadius.circular(16)),
               title: const Text('Delete Chat',
                   style: TextStyle(fontWeight: FontWeight.w700)),
-              content: const Text('Delete this chat? This cannot be undone.'),
+              content: const Text('Delete this chat permanently? This cannot be undone.'),
               actions: [
                 TextButton(
                     onPressed: () => Navigator.pop(context),
                     child: const Text('Cancel')),
                 ElevatedButton(
-                  onPressed: () {
-                    setState(() => _chats.removeWhere((c) => c.id == id));
+                  onPressed: () async {
                     Navigator.pop(context);
+                    setState(() => _chats.removeWhere((c) => c.id == id));
                     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                       content: const Text('Chat deleted'),
                       backgroundColor: AppColors.busy,
@@ -113,6 +113,11 @@ class _ChatListScreenState extends State<ChatListScreen> {
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(10)),
                     ));
+                    try {
+                      await ApiService.deleteChat(id);
+                    } catch (_) {
+                      // Best-effort server delete; chat is already gone from local list
+                    }
                   },
                   style:
                       ElevatedButton.styleFrom(backgroundColor: AppColors.busy),

@@ -46,7 +46,8 @@ func Setup(db *sql.DB) http.Handler {
 	protected.HandleFunc("POST /api/chats", chat.CreateChat)
 	protected.HandleFunc("GET  /api/chats/{id}/messages", chat.GetMessages)
 	protected.HandleFunc("POST /api/chats/{id}/messages", chat.SendMessage)
-	protected.HandleFunc("PATCH /api/chats/{id}/read", chat.MarkChatRead)
+	protected.HandleFunc("PATCH  /api/chats/{id}/read", chat.MarkChatRead)
+	protected.HandleFunc("DELETE /api/chats/{id}", chat.DeleteChat)
 	protected.HandleFunc("POST /api/chat/ai", chat.AIChat)
 
 	// Meetings
