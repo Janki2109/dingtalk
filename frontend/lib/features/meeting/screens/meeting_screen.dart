@@ -11,15 +11,7 @@ import '../../../data/models/app_models.dart';
 import '../../../data/services/api_service.dart';
 import '../../../data/services/auth_provider.dart';
 
-// ═══════════════════════════════════════════════════════════════════════════
-// MEETING STATUS
-// ═══════════════════════════════════════════════════════════════════════════
-
 enum MeetingStatus { connecting, waiting, admitted, rejected, removed, ended }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// MODELS
-// ═══════════════════════════════════════════════════════════════════════════
 
 class WaitingPerson {
   final String userId;
@@ -41,10 +33,6 @@ class RoomParticipant {
       isHost: j['is_host'] ?? false);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// MEETING ROOM SERVICE
-// ═══════════════════════════════════════════════════════════════════════════
-
 class MeetingRoomService extends ChangeNotifier {
   static const _base = AppConstants.serverUrl;
 
@@ -53,6 +41,7 @@ class MeetingRoomService extends ChangeNotifier {
   List<RoomParticipant> participants = [];
   String roomTitle = '';
   String hostName = '';
+  String errorMessage = '';
 
   Timer? _pollTimer;
   String _meetingId = '';
@@ -73,6 +62,7 @@ class MeetingRoomService extends ChangeNotifier {
     _isHost = isHost;
     roomTitle = title;
     status = MeetingStatus.connecting;
+    errorMessage = '';
     notifyListeners();
     if (isHost) {
       await _createRoom(title);
@@ -94,17 +84,24 @@ class MeetingRoomService extends ChangeNotifier {
               'meeting_id': _meetingId,
             }),
           )
-          .timeout(const Duration(seconds: 10));
+          .timeout(const Duration(seconds: 15));
+
       if (res.statusCode == 200 || res.statusCode == 201) {
+        // ✅ Host is admitted immediately
         status = MeetingStatus.admitted;
         notifyListeners();
         _startPollingWaitingRoom();
       } else {
-        status = MeetingStatus.ended;
+        // ✅ Don't end — show error but keep connecting
+        errorMessage = 'Could not create room (${res.statusCode})';
+        status = MeetingStatus.admitted; // Let host in anyway
         notifyListeners();
+        _startPollingWaitingRoom();
       }
-    } catch (_) {
-      status = MeetingStatus.ended;
+    } catch (e) {
+      // ✅ Network error — still let host in, meeting will work via Jitsi
+      errorMessage = 'Network error: $e';
+      status = MeetingStatus.admitted;
       notifyListeners();
     }
   }
@@ -121,25 +118,31 @@ class MeetingRoomService extends ChangeNotifier {
               'user_name': _userName,
             }),
           )
-          .timeout(const Duration(seconds: 10));
-      final body = jsonDecode(res.body);
+          .timeout(const Duration(seconds: 15));
+
       if (res.statusCode == 404) {
+        // Host hasn't started yet — wait
         status = MeetingStatus.waiting;
         notifyListeners();
         _startPollingStatus();
         return;
       }
+
+      final body = jsonDecode(res.body);
       final joinStatus = body['status'] ?? '';
       hostName = body['host_name'] ?? '';
       roomTitle = body['title'] ?? roomTitle;
+
       if (joinStatus == 'admitted') {
         status = MeetingStatus.admitted;
+        notifyListeners();
       } else {
         status = MeetingStatus.waiting;
+        notifyListeners();
         _startPollingStatus();
       }
-      notifyListeners();
-    } catch (_) {
+    } catch (e) {
+      // Network error — keep waiting
       status = MeetingStatus.waiting;
       notifyListeners();
       _startPollingStatus();
@@ -178,11 +181,8 @@ class MeetingRoomService extends ChangeNotifier {
         _pollTimer?.cancel();
         status = MeetingStatus.rejected;
         notifyListeners();
-      } else if (s == 'not_found') {
-        _pollTimer?.cancel();
-        status = MeetingStatus.ended;
-        notifyListeners();
       }
+      // ✅ Don't end on 'not_found' — host might not have started yet
     } catch (_) {}
   }
 
@@ -271,10 +271,6 @@ class MeetingRoomService extends ChangeNotifier {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// MEETING ROOM SCREEN
-// ═══════════════════════════════════════════════════════════════════════════
-
 class MeetingRoomScreen extends StatefulWidget {
   final String meetingId;
   final String meetingCode;
@@ -326,13 +322,14 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen> {
   void _onUpdate() {
     if (!mounted) return;
     setState(() {});
+    // ✅ Launch Jitsi when admitted
     if (_svc.status == MeetingStatus.admitted && !_jitsiLaunched) {
       _jitsiLaunched = true;
       _launchJitsi();
     }
-    if (_svc.status == MeetingStatus.ended ||
-        _svc.status == MeetingStatus.removed) {
-      Future.delayed(const Duration(seconds: 1), () {
+    // ✅ Only auto-pop for removed — not for ended (let user see the screen)
+    if (_svc.status == MeetingStatus.removed) {
+      Future.delayed(const Duration(seconds: 2), () {
         if (mounted) Navigator.pop(context);
       });
     }
@@ -508,7 +505,7 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen> {
             child: const Icon(Icons.check_circle_rounded,
                 color: AppColors.online, size: 56)),
         const SizedBox(height: 28),
-        const Text('You\'re admitted! 🎉',
+        const Text('You\'re in! 🎉',
             style: TextStyle(
                 color: Colors.white,
                 fontSize: 22,
@@ -918,10 +915,6 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen> {
         ])),
       );
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// MEETING SCREEN (main tab screen)
-// ═══════════════════════════════════════════════════════════════════════════
 
 class MeetingScreen extends StatefulWidget {
   const MeetingScreen({super.key});
@@ -1401,7 +1394,6 @@ class _MeetingScreenState extends State<MeetingScreen> {
   Widget build(BuildContext context) {
     final themeColor = context.watch<AuthProvider>().themeColor;
     final user = context.watch<AuthProvider>().user;
-    final isAdmin = context.watch<AuthProvider>().isAdmin;
 
     return Scaffold(
       backgroundColor: AppColors.bg,
