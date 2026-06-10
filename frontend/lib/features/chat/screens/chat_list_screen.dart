@@ -23,7 +23,6 @@ class _ChatListScreenState extends State<ChatListScreen> {
   void initState() {
     super.initState();
     _load();
-    // ✅ Auto refresh every 5 seconds so new messages appear
     Future.doWhile(() async {
       await Future.delayed(const Duration(seconds: 5));
       if (!mounted) return false;
@@ -56,7 +55,6 @@ class _ChatListScreenState extends State<ChatListScreen> {
     }
   }
 
-  // ✅ Silent load — no loading spinner, just updates the list
   Future<void> _loadSilent() async {
     try {
       final chats = await ApiService.getChats();
@@ -101,7 +99,6 @@ class _ChatListScreenState extends State<ChatListScreen> {
             currentUserId: context.read<AuthProvider>().user?.id ?? '',
           ),
         ));
-    // ✅ Reload after coming back from chat
     _load();
   }
 
@@ -121,7 +118,6 @@ class _ChatListScreenState extends State<ChatListScreen> {
                 ElevatedButton(
                   onPressed: () {
                     Navigator.pop(context);
-                    // ✅ Just remove from local list — no API call needed
                     setState(() => _chats.removeWhere((c) => c.id == id));
                     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                       content: const Text('Chat removed'),
@@ -404,11 +400,6 @@ class _ChatTile extends StatelessWidget {
     return u.statusColor;
   }
 
-  bool get _isOnline {
-    if (chat.isGroup) return false;
-    return _otherUser?.status == 'online';
-  }
-
   @override
   Widget build(BuildContext context) {
     final isAI = chat.id == 'ai';
@@ -497,27 +488,21 @@ class _ChatTile extends StatelessWidget {
                               : AppColors.textMuted)),
                 ]),
                 const SizedBox(height: 3),
+                // ✅ FIXED: Show last message for ALL chats like WhatsApp
                 Row(children: [
-                  if (!isAI && !chat.isGroup)
-                    Text(_statusText,
-                        style: TextStyle(
-                            fontSize: 11,
-                            color: _isOnline
-                                ? AppColors.online
-                                : AppColors.textMuted,
-                            fontWeight:
-                                _isOnline ? FontWeight.w600 : FontWeight.w400)),
-                  if (chat.isGroup || isAI)
-                    Expanded(
-                        child: Text(chat.lastMessage,
-                            style: TextStyle(
-                                fontSize: 13,
-                                color: chat.unreadCount > 0
-                                    ? AppColors.textSecondary
-                                    : AppColors.textMuted),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis)),
-                  const Spacer(),
+                  Expanded(
+                      child: Text(
+                    chat.lastMessage.isNotEmpty
+                        ? chat.lastMessage
+                        : _statusText,
+                    style: TextStyle(
+                        fontSize: 13,
+                        color: chat.unreadCount > 0
+                            ? AppColors.textSecondary
+                            : AppColors.textMuted),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  )),
                   if (chat.isMuted)
                     const Icon(Icons.volume_off,
                         size: 13, color: AppColors.textMuted),
@@ -526,15 +511,6 @@ class _ChatTile extends StatelessWidget {
                     UnreadBadge(count: chat.unreadCount),
                   ],
                 ]),
-                if (!isAI && !chat.isGroup && chat.lastMessage.isNotEmpty)
-                  Text(chat.lastMessage,
-                      style: TextStyle(
-                          fontSize: 12,
-                          color: chat.unreadCount > 0
-                              ? AppColors.textSecondary
-                              : AppColors.textMuted),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis),
               ])),
         ]),
       ),

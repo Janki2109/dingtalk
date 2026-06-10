@@ -55,10 +55,48 @@ func migrate(db *sql.DB) {
 	db.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(50) DEFAULT ''")
 	db.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT DEFAULT ''")
 
-	// Fix messages table
+	// ✅ Create chat tables if missing
+	db.Exec(`CREATE TABLE IF NOT EXISTS chats (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		name VARCHAR(200) DEFAULT '',
+		is_group BOOLEAN DEFAULT false,
+		avatar_url TEXT DEFAULT '',
+		created_by UUID,
+		is_pinned BOOLEAN DEFAULT false,
+		is_muted BOOLEAN DEFAULT false,
+		created_at TIMESTAMP DEFAULT NOW(),
+		updated_at TIMESTAMP DEFAULT NOW()
+	)`)
+
+	db.Exec(`CREATE TABLE IF NOT EXISTS chat_members (
+		chat_id UUID,
+		user_id UUID,
+		PRIMARY KEY (chat_id, user_id)
+	)`)
+
+	db.Exec(`CREATE TABLE IF NOT EXISTS messages (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		chat_id UUID,
+		sender_id UUID,
+		content TEXT DEFAULT '',
+		message_type VARCHAR(50) DEFAULT 'text',
+		file_url TEXT DEFAULT '',
+		file_name TEXT DEFAULT '',
+		reply_to_id UUID,
+		is_read BOOLEAN DEFAULT false,
+		created_at TIMESTAMP DEFAULT NOW()
+	)`)
+
+	// Fix messages table - add missing columns
 	db.Exec("ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_url TEXT DEFAULT ''")
 	db.Exec("ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_name TEXT DEFAULT ''")
 	db.Exec("ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_id UUID")
+
+	// Fix chats table - add missing columns
+	db.Exec("ALTER TABLE chats ADD COLUMN IF NOT EXISTS is_pinned BOOLEAN DEFAULT false")
+	db.Exec("ALTER TABLE chats ADD COLUMN IF NOT EXISTS is_muted BOOLEAN DEFAULT false")
+	db.Exec("ALTER TABLE chats ADD COLUMN IF NOT EXISTS avatar_url TEXT DEFAULT ''")
+	db.Exec("ALTER TABLE chats ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()")
 
 	// Fix tasks table
 	db.Exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()")
