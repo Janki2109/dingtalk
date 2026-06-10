@@ -55,7 +55,12 @@ func migrate(db *sql.DB) {
 	db.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(50) DEFAULT ''")
 	db.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT DEFAULT ''")
 
-	// Fix tasks table — add ALL missing columns
+	// Fix messages table
+	db.Exec("ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_url TEXT DEFAULT ''")
+	db.Exec("ALTER TABLE messages ADD COLUMN IF NOT EXISTS file_name TEXT DEFAULT ''")
+	db.Exec("ALTER TABLE messages ADD COLUMN IF NOT EXISTS reply_to_id UUID")
+
+	// Fix tasks table
 	db.Exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()")
 	db.Exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()")
 	db.Exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assignee_id UUID")
@@ -67,7 +72,7 @@ func migrate(db *sql.DB) {
 	db.Exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'todo'")
 	db.Exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS title VARCHAR(500)")
 
-	// Create tasks table if it doesn't exist at all
+	// Create tasks table if not exists
 	db.Exec(`CREATE TABLE IF NOT EXISTS tasks (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		title VARCHAR(500) NOT NULL,
