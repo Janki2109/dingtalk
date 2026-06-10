@@ -23,6 +23,13 @@ class _ChatListScreenState extends State<ChatListScreen> {
   void initState() {
     super.initState();
     _load();
+    // ✅ Auto refresh every 5 seconds so new messages appear
+    Future.doWhile(() async {
+      await Future.delayed(const Duration(seconds: 5));
+      if (!mounted) return false;
+      await _loadSilent();
+      return mounted;
+    });
   }
 
   Future<void> _load() async {
@@ -47,6 +54,14 @@ class _ChatListScreenState extends State<ChatListScreen> {
           _loading = false;
         });
     }
+  }
+
+  // ✅ Silent load — no loading spinner, just updates the list
+  Future<void> _loadSilent() async {
+    try {
+      final chats = await ApiService.getChats();
+      if (mounted) setState(() => _chats = chats);
+    } catch (_) {}
   }
 
   List<ChatModel> get _filtered => _chats
@@ -86,6 +101,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
             currentUserId: context.read<AuthProvider>().user?.id ?? '',
           ),
         ));
+    // ✅ Reload after coming back from chat
     _load();
   }
 
@@ -97,27 +113,23 @@ class _ChatListScreenState extends State<ChatListScreen> {
                   borderRadius: BorderRadius.circular(16)),
               title: const Text('Delete Chat',
                   style: TextStyle(fontWeight: FontWeight.w700)),
-              content: const Text('Delete this chat permanently? This cannot be undone.'),
+              content: const Text('Remove this chat from your list?'),
               actions: [
                 TextButton(
                     onPressed: () => Navigator.pop(context),
                     child: const Text('Cancel')),
                 ElevatedButton(
-                  onPressed: () async {
+                  onPressed: () {
                     Navigator.pop(context);
+                    // ✅ Just remove from local list — no API call needed
                     setState(() => _chats.removeWhere((c) => c.id == id));
                     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                      content: const Text('Chat deleted'),
+                      content: const Text('Chat removed'),
                       backgroundColor: AppColors.busy,
                       behavior: SnackBarBehavior.floating,
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(10)),
                     ));
-                    try {
-                      await ApiService.deleteChat(id);
-                    } catch (_) {
-                      // Best-effort server delete; chat is already gone from local list
-                    }
                   },
                   style:
                       ElevatedButton.styleFrom(backgroundColor: AppColors.busy),
@@ -349,7 +361,6 @@ class _ChatListScreenState extends State<ChatListScreen> {
   }
 }
 
-// ── Chat Tile ─────────────────────────────────────────────────────────────────
 class _ChatTile extends StatelessWidget {
   final ChatModel chat;
   final String currentUserId;
@@ -367,22 +378,17 @@ class _ChatTile extends StatelessWidget {
     required this.themeColor,
   });
 
-  // ── KEY FIX: Find other user by ID not by name ────────────────────────────
+  String get _displayName => chat.name;
+
   UserModel? get _otherUser {
     if (chat.isGroup) return null;
     try {
-      return userMap.values.firstWhere(
-        (u) => u.name == chat.name && u.id != currentUserId,
-      );
+      return userMap.values
+          .firstWhere((u) => u.name == chat.name && u.id != currentUserId);
     } catch (_) {
       return null;
     }
   }
-
-  // The display name — always show OTHER person's name from backend
-  // Backend already returns correct name via GetChats query
-  String get _displayName =>
-      chat.name; // Backend sets this to other person's name
 
   String get _statusText {
     if (chat.isGroup) return 'Group';
@@ -413,7 +419,6 @@ class _ChatTile extends StatelessWidget {
         color: AppColors.surface,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         child: Row(children: [
-          // Avatar
           Stack(children: [
             chat.isGroup
                 ? const GroupAvatar(size: 52)
@@ -425,29 +430,26 @@ class _ChatTile extends StatelessWidget {
                   bottom: 0,
                   right: 0,
                   child: Container(
-                    width: 18,
-                    height: 18,
-                    decoration: const BoxDecoration(
-                        gradient: AppColors.purpleGrad, shape: BoxShape.circle),
-                    child: const Icon(Icons.auto_awesome,
-                        color: Colors.white, size: 10),
-                  )),
+                      width: 18,
+                      height: 18,
+                      decoration: const BoxDecoration(
+                          gradient: AppColors.purpleGrad,
+                          shape: BoxShape.circle),
+                      child: const Icon(Icons.auto_awesome,
+                          color: Colors.white, size: 10))),
             if (!chat.isGroup && !isAI)
               Positioned(
                   bottom: 0,
                   right: 0,
                   child: Container(
-                    width: 14,
-                    height: 14,
-                    decoration: BoxDecoration(
-                      color: _statusColor,
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.white, width: 2),
-                    ),
-                  )),
+                      width: 14,
+                      height: 14,
+                      decoration: BoxDecoration(
+                          color: _statusColor,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 2)))),
           ]),
           const SizedBox(width: 12),
-
           Expanded(
               child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -479,18 +481,14 @@ class _ChatTile extends StatelessWidget {
                                 color: AppColors.purple,
                                 fontSize: 9,
                                 fontWeight: FontWeight.w700))),
-
-                  // ── SHOW OTHER PERSON'S NAME (from backend) ──────────────────
                   Expanded(
-                      child: Text(
-                    _displayName, // This is already the other person's name
-                    style: TextStyle(
-                        fontWeight: chat.unreadCount > 0
-                            ? FontWeight.w700
-                            : FontWeight.w600,
-                        fontSize: 15),
-                    overflow: TextOverflow.ellipsis,
-                  )),
+                      child: Text(_displayName,
+                          style: TextStyle(
+                              fontWeight: chat.unreadCount > 0
+                                  ? FontWeight.w700
+                                  : FontWeight.w600,
+                              fontSize: 15),
+                          overflow: TextOverflow.ellipsis)),
                   Text(formatTime(chat.lastTime),
                       style: TextStyle(
                           fontSize: 11,
@@ -640,7 +638,6 @@ class _Option extends StatelessWidget {
       );
 }
 
-// ── New Chat Sheet ────────────────────────────────────────────────────────────
 class _NewChatSheet extends StatefulWidget {
   final String currentUserId;
   final bool isGroup;
@@ -896,14 +893,13 @@ class _NewChatSheetState extends State<_NewChatSheet> {
                                   bottom: 0,
                                   right: 0,
                                   child: Container(
-                                    width: 12,
-                                    height: 12,
-                                    decoration: BoxDecoration(
-                                        color: u.statusColor,
-                                        shape: BoxShape.circle,
-                                        border: Border.all(
-                                            color: Colors.white, width: 2)),
-                                  )),
+                                      width: 12,
+                                      height: 12,
+                                      decoration: BoxDecoration(
+                                          color: u.statusColor,
+                                          shape: BoxShape.circle,
+                                          border: Border.all(
+                                              color: Colors.white, width: 2)))),
                             ]),
                             title: Text(u.name,
                                 style: const TextStyle(
