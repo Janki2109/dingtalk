@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -44,14 +45,15 @@ type Hub struct {
 
 var GlobalHub = &Hub{Rooms: make(map[string]*MeetingRoom)}
 
-func (h *Hub) CreateRoom(hostID, hostName, title string) *MeetingRoom {
-	id := generateID()
+func (h *Hub) CreateRoom(hostID, hostName, title, roomID string) *MeetingRoom {
+	// Use the meeting code from Jitsi so the room ID matches the meeting code
 	room := &MeetingRoom{
-		ID:          id,
-		Title:       title,
-		HostID:      hostID,
-		HostName:    hostName,
-		MeetingLink: fmt.Sprintf("http://localhost:8080/join/%s", id),
+		ID:       roomID,
+		Title:    title,
+		HostID:   hostID,
+		HostName: hostName,
+		// ✅ FIXED: use Render URL not localhost
+		MeetingLink: fmt.Sprintf("https://dingtalk.onrender.com/join/%s", roomID),
 		Participants: []Participant{
 			{UserID: hostID, UserName: hostName, IsHost: true, JoinedAt: time.Now()},
 		},
@@ -60,7 +62,7 @@ func (h *Hub) CreateRoom(hostID, hostName, title string) *MeetingRoom {
 		IsActive:    true,
 	}
 	h.mu.Lock()
-	h.Rooms[id] = room
+	h.Rooms[roomID] = room
 	h.mu.Unlock()
 	return room
 }
@@ -81,11 +83,13 @@ func (h *Hub) DeleteRoom(id string) {
 func (r *MeetingRoom) AddToWaiting(userID, userName string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	// Already in waiting room
 	for _, p := range r.WaitingRoom {
 		if p.UserID == userID {
 			return
 		}
 	}
+	// Already admitted
 	for _, p := range r.Participants {
 		if p.UserID == userID {
 			return
@@ -153,6 +157,8 @@ func (r *MeetingRoom) RemoveParticipant(userID string) {
 
 // ── HTTP Handlers ─────────────────────────────────────────────────────────────
 
+// POST /api/room/create
+// Called by admin when they start a meeting — creates the in-memory room
 func CreateInstantMeeting(w http.ResponseWriter, r *http.Request) {
 	setCORS(w)
 	if r.Method == http.MethodOptions {
@@ -160,15 +166,32 @@ func CreateInstantMeeting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		HostID   string `json:"host_id"`
-		HostName string `json:"host_name"`
-		Title    string `json:"title"`
+		HostID    string `json:"host_id"`
+		HostName  string `json:"host_name"`
+		Title     string `json:"title"`
+		MeetingID string `json:"meeting_id"` // pass the Jitsi code so room ID matches
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 	if req.Title == "" {
 		req.Title = "My Meeting"
 	}
-	room := GlobalHub.CreateRoom(req.HostID, req.HostName, req.Title)
+	if req.MeetingID == "" {
+		req.MeetingID = generateID()
+	}
+
+	// If room already exists (host rejoining), just return it
+	if existing, ok := GlobalHub.GetRoom(req.MeetingID); ok {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"meeting_id":   existing.ID,
+			"meeting_link": existing.MeetingLink,
+			"title":        existing.Title,
+			"host_name":    existing.HostName,
+		})
+		return
+	}
+
+	room := GlobalHub.CreateRoom(req.HostID, req.HostName, req.Title, req.MeetingID)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"meeting_id":   room.ID,
@@ -178,6 +201,8 @@ func CreateInstantMeeting(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// POST /api/room/join
+// Called by user when they want to join — puts them in waiting room
 func JoinWaitingRoom(w http.ResponseWriter, r *http.Request) {
 	setCORS(w)
 	if r.Method == http.MethodOptions {
@@ -196,7 +221,18 @@ func JoinWaitingRoom(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
 		json.NewEncoder(w).Encode(map[string]string{
-			"error": "Meeting not found. Check the meeting ID.",
+			"error": "Meeting not found. The host may not have started yet.",
+		})
+		return
+	}
+
+	// If host is joining their own room, admit directly
+	if room.HostID == req.UserID {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{
+			"status":    "admitted",
+			"host_name": room.HostName,
+			"title":     room.Title,
 		})
 		return
 	}
@@ -210,6 +246,8 @@ func JoinWaitingRoom(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// GET /api/room/status?meeting_id=XXX&user_id=YYY
+// Polled by user every 3 seconds to check if they've been admitted
 func CheckParticipantStatus(w http.ResponseWriter, r *http.Request) {
 	setCORS(w)
 	meetingID := r.URL.Query().Get("meeting_id")
@@ -223,10 +261,9 @@ func CheckParticipantStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	status := room.CheckStatus(userID)
-	w.Header().Set("Content-Type", "application/json")
-
 	room.mu.RLock()
 	defer room.mu.RUnlock()
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":       status,
 		"meeting_id":   meetingID,
@@ -236,16 +273,12 @@ func CheckParticipantStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// GET /api/room/waiting?meeting_id=XXX
+// Polled by admin every 3 seconds to see who is in the waiting room
 func GetWaitingRoom(w http.ResponseWriter, r *http.Request) {
 	setCORS(w)
-	parts := splitPath(r.URL.Path)
-	meetingID := ""
-	for i, p := range parts {
-		if p == "meetings" && i+1 < len(parts) {
-			meetingID = parts[i+1]
-			break
-		}
-	}
+	// ✅ FIXED: use query param instead of path parsing
+	meetingID := r.URL.Query().Get("meeting_id")
 
 	room, ok := GlobalHub.GetRoom(meetingID)
 	if !ok {
@@ -268,6 +301,8 @@ func GetWaitingRoom(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// POST /api/room/admit
+// Called by admin to admit or deny a user from the waiting room
 func AdmitParticipant(w http.ResponseWriter, r *http.Request) {
 	setCORS(w)
 	if r.Method == http.MethodOptions {
@@ -277,7 +312,7 @@ func AdmitParticipant(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		MeetingID string `json:"meeting_id"`
 		UserID    string `json:"user_id"`
-		Action    string `json:"action"`
+		Action    string `json:"action"` // "admit" or "deny"
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
@@ -299,6 +334,8 @@ func AdmitParticipant(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
+// POST /api/room/end
+// Called by admin when they end the meeting
 func EndMeeting(w http.ResponseWriter, r *http.Request) {
 	setCORS(w)
 	if r.Method == http.MethodOptions {
@@ -341,20 +378,5 @@ func setCORS(w http.ResponseWriter) {
 }
 
 func splitPath(path string) []string {
-	var parts []string
-	cur := ""
-	for _, ch := range path {
-		if ch == '/' {
-			if cur != "" {
-				parts = append(parts, cur)
-				cur = ""
-			}
-		} else {
-			cur += string(ch)
-		}
-	}
-	if cur != "" {
-		parts = append(parts, cur)
-	}
-	return parts
+	return strings.Split(strings.Trim(path, "/"), "/")
 }

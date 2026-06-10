@@ -56,7 +56,7 @@ class UserModel {
         status: j['status'] ?? 'offline',
         avatarUrl: j['avatar_url'] ?? '',
         phone: j['phone'] ?? '',
-        userRole: j['user_role'] ?? 'employee',
+        userRole: j['user_role'] ?? j['role'] ?? 'employee', // ✅ FIXED
         bio: j['bio'] ?? '',
         lastSeen:
             j['last_seen'] != null ? DateTime.tryParse(j['last_seen']) : null,

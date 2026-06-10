@@ -20,7 +20,7 @@ func NewChatController(db *sql.DB) *ChatController { return &ChatController{DB: 
 
 func (c *ChatController) GetChats(w http.ResponseWriter, r *http.Request) {
 	userID := r.Header.Get("X-User-ID")
-	fmt.Println("DEBUG GetChats userID:", userID) // ← ADD THIS
+	fmt.Println("DEBUG GetChats userID:", userID)
 	rows, err := c.DB.Query(`
 		SELECT
 			c.id,
@@ -219,14 +219,20 @@ func (c *ChatController) SendMessage(w http.ResponseWriter, r *http.Request) {
 		msgType = "text"
 	}
 
+	// ✅ FIX: save file_url and file_name
+	// ✅ REPLACE WITH:
+	fileURL := req.FileURL
+	fileName := req.FileName
+
 	var msg models.Message
 	err := c.DB.QueryRow(`
-		INSERT INTO messages (chat_id, sender_id, content, message_type, is_read)
-		VALUES ($1, $2, $3, $4, false)
-		RETURNING id, chat_id, sender_id, content, message_type, is_read, created_at`,
-		chatID, userID, req.Content, msgType,
+		INSERT INTO messages (chat_id, sender_id, content, message_type, file_url, file_name, is_read)
+		VALUES ($1, $2, $3, $4, $5, $6, false)
+		RETURNING id, chat_id, sender_id, content, message_type,
+		          COALESCE(file_url,''), COALESCE(file_name,''), is_read, created_at`,
+		chatID, userID, req.Content, msgType, fileURL, fileName,
 	).Scan(&msg.ID, &msg.ChatID, &msg.SenderID, &msg.Content,
-		&msg.MessageType, &msg.IsRead, &msg.CreatedAt)
+		&msg.MessageType, &msg.FileURL, &msg.FileName, &msg.IsRead, &msg.CreatedAt)
 	if err != nil {
 		utils.InternalError(w, err)
 		return
