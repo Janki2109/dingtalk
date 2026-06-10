@@ -1,7 +1,7 @@
 class AppConstants {
   // ── API ──────────────────────────────────────────────────────
-  static const String apiUrl = 'https://dingtalk.onrender.com/api';
-  static const String serverUrl = 'https://dingtalk.onrender.com';
+  static const String apiUrl = 'https://dingtalk-1b41.onrender.com/api';
+  static const String serverUrl = 'https://dingtalk-1b41.onrender.com';
 
   // ── App ──────────────────────────────────────────────────────
   static const String appName = 'WorkSpace Pro';
