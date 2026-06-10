@@ -6,7 +6,7 @@ import '../../../data/models/app_models.dart';
 import '../../../data/services/api_service.dart';
 import '../../../data/services/auth_provider.dart';
 import '../../../shared/widgets/app_widgets.dart';
-import '../../meeting/screens/meeting_room_screen.dart';
+import '../../meeting/screens/meeting_screen.dart';
 
 class AdminMeetingsScreen extends StatefulWidget {
   const AdminMeetingsScreen({super.key});
@@ -577,15 +577,12 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
                             Navigator.push(
                                 context,
                                 MaterialPageRoute(
-                                    builder: (_) => MeetingRoomScreen(
-                                          meetingId: meeting.id,
-                                          meetingCode: meeting.code,
-                                          inviteLink:
-                                              'https://meet.jit.si/WorkspacePro-${meeting.code}',
-                                          isHost: true,
-                                          meetingTitle: meeting.title,
-                                          userName: user?.name ?? 'Admin',
-                                        )));
+                                  builder: (_) => WebRTCMeetingScreen(
+                                    meetingCode: meeting.code,
+                                    meetingTitle: meeting.title,
+                                    isHost: false,
+                                  ),
+                                ));
                           },
                           icon: const Icon(Icons.videocam_rounded),
                           label: const Text('Start Meeting Now',
@@ -878,15 +875,10 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
                                     onPressed: () => Navigator.push(
                                         context,
                                         MaterialPageRoute(
-                                            builder: (_) => MeetingRoomScreen(
-                                                  meetingId: m.id,
+                                            builder: (_) => WebRTCMeetingScreen(
                                                   meetingCode: m.code,
-                                                  inviteLink:
-                                                      'https://meet.jit.si/WorkspacePro-${m.code}',
-                                                  isHost: isHost,
                                                   meetingTitle: m.title,
-                                                  userName:
-                                                      user?.name ?? 'Admin',
+                                                  isHost: isHost,
                                                 ))),
                                     icon: Icon(
                                         isHost
@@ -971,14 +963,10 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
                         Navigator.push(
                             context,
                             MaterialPageRoute(
-                                builder: (_) => MeetingRoomScreen(
-                                      meetingId: meeting.id,
+                                builder: (_) => WebRTCMeetingScreen(
                                       meetingCode: meeting.code,
-                                      inviteLink:
-                                          'https://meet.jit.si/WorkspacePro-${meeting.code}',
-                                      isHost: meeting.organizerId == user?.id,
                                       meetingTitle: meeting.title,
-                                      userName: user?.name ?? 'Admin',
+                                      isHost: meeting.organizerId == user?.id,
                                     )));
                       } catch (e) {
                         setS(() {
@@ -1011,15 +999,11 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
                                   Navigator.push(
                                       context,
                                       MaterialPageRoute(
-                                          builder: (_) => MeetingRoomScreen(
-                                                meetingId: meeting.id,
+                                          builder: (_) => WebRTCMeetingScreen(
                                                 meetingCode: meeting.code,
-                                                inviteLink:
-                                                    'https://meet.jit.si/WorkspacePro-${meeting.code}',
+                                                meetingTitle: meeting.title,
                                                 isHost: meeting.organizerId ==
                                                     user?.id,
-                                                meetingTitle: meeting.title,
-                                                userName: user?.name ?? 'Admin',
                                               )));
                                 } catch (e) {
                                   setS(() {
