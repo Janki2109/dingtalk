@@ -48,18 +48,26 @@ func migrate(db *sql.DB) {
 	// Fix user roles
 	db.Exec("UPDATE users SET user_role='employee' WHERE user_role IS NULL OR user_role=''")
 
-	// Rename tasks columns if needed
-	db.Exec("ALTER TABLE tasks RENAME COLUMN assigned_to TO assignee_id")
-	db.Exec("ALTER TABLE tasks RENAME COLUMN assignee TO assignee_id")
-
-	// Add missing columns
+	// Add missing user columns
 	db.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS user_role VARCHAR(20) DEFAULT 'employee'")
 	db.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT DEFAULT ''")
 	db.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen TIMESTAMP")
 	db.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(50) DEFAULT ''")
 	db.Exec("ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url TEXT DEFAULT ''")
 
-	// Create tasks table
+	// Fix tasks table — add ALL missing columns
+	db.Exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()")
+	db.Exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()")
+	db.Exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assignee_id UUID")
+	db.Exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS created_by UUID")
+	db.Exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS project_name VARCHAR(200) DEFAULT 'General'")
+	db.Exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS due_date TIMESTAMP DEFAULT NOW()")
+	db.Exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS priority VARCHAR(20) DEFAULT 'medium'")
+	db.Exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS description TEXT DEFAULT ''")
+	db.Exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'todo'")
+	db.Exec("ALTER TABLE tasks ADD COLUMN IF NOT EXISTS title VARCHAR(500)")
+
+	// Create tasks table if it doesn't exist at all
 	db.Exec(`CREATE TABLE IF NOT EXISTS tasks (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		title VARCHAR(500) NOT NULL,
@@ -88,6 +96,7 @@ func migrate(db *sql.DB) {
 	)`)
 	db.Exec("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS body TEXT DEFAULT ''")
 	db.Exec("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS action_id VARCHAR(200) DEFAULT ''")
+	db.Exec("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS message TEXT DEFAULT ''")
 
 	// Create approvals table
 	db.Exec(`CREATE TABLE IF NOT EXISTS approvals (
