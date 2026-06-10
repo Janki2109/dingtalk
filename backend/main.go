@@ -53,20 +53,34 @@ func migrate(db *sql.DB) {
 		// Fix user_role for existing users
 		`UPDATE users SET user_role='employee' WHERE user_role IS NULL OR user_role=''`,
 
+		// ✅ ADD THIS BLOCK:
+		`DO $$ BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='tasks' AND column_name='assigned_to') THEN
+            ALTER TABLE tasks RENAME COLUMN assigned_to TO assignee_id;
+        END IF;
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='tasks' AND column_name='assignee') THEN
+            ALTER TABLE tasks RENAME COLUMN assignee TO assignee_id;
+        END IF;
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='tasks' AND column_name='user_id') THEN
+            ALTER TABLE tasks RENAME COLUMN user_id TO assignee_id;
+        END IF;
+    END $$`,
+
+		// Tasks table
 		// Tasks table
 		`CREATE TABLE IF NOT EXISTS tasks (
-			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-			title VARCHAR(500) NOT NULL,
-			description TEXT DEFAULT '',
-			assignee_id UUID,
-			created_by UUID,
-			project_name VARCHAR(200) DEFAULT 'General',
-			due_date TIMESTAMP DEFAULT NOW() + INTERVAL '7 days',
-			priority VARCHAR(20) DEFAULT 'medium',
-			status VARCHAR(20) DEFAULT 'todo',
-			created_at TIMESTAMP DEFAULT NOW(),
-			updated_at TIMESTAMP DEFAULT NOW()
-		)`,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    title VARCHAR(500) NOT NULL,
+    description TEXT DEFAULT '',
+    assignee_id UUID,
+    created_by UUID,
+    project_name VARCHAR(200) DEFAULT 'General',
+    due_date TIMESTAMP DEFAULT NOW() + INTERVAL '7 days',
+    priority VARCHAR(20) DEFAULT 'medium',
+    status VARCHAR(20) DEFAULT 'todo',
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+)`,
 
 		// Notifications table
 		`CREATE TABLE IF NOT EXISTS notifications (
