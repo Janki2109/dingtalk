@@ -14,20 +14,47 @@ func NewApprovalController(db *sql.DB) *ApprovalController { return &ApprovalCon
 
 func (c *ApprovalController) GetApprovals(w http.ResponseWriter, r *http.Request) {
 	userID := r.Header.Get("X-User-ID")
-	rows, err := c.DB.Query(`
-		SELECT a.id,a.title,a.approval_type,a.requester_id,COALESCE(u1.name,''),
-		       COALESCE(a.approver_id::text,''),COALESCE(u2.name,''),
-		       COALESCE(a.description,''),a.status,a.created_at
-		FROM approvals a
-		LEFT JOIN users u1 ON u1.id=a.requester_id
-		LEFT JOIN users u2 ON u2.id=a.approver_id
-		WHERE a.requester_id=$1 OR a.approver_id=$1
-		ORDER BY a.created_at DESC`, userID)
+
+	// Get user role
+	var userRole string
+	c.DB.QueryRow(`SELECT COALESCE(user_role,'employee') FROM users WHERE id=$1`, userID).Scan(&userRole)
+
+	var rows *sql.Rows
+	var err error
+
+	if userRole == "admin" {
+		// Admin sees:
+		// 1. Requests sent directly to them (approver_id = admin)
+		// 2. Work reports from ALL employees (approval_type = 'work_report')
+		rows, err = c.DB.Query(`
+			SELECT a.id, a.title, a.approval_type, a.requester_id, COALESCE(u1.name,''),
+			       COALESCE(a.approver_id::text,''), COALESCE(u2.name,''),
+			       COALESCE(a.description,''), a.status, a.created_at
+			FROM approvals a
+			LEFT JOIN users u1 ON u1.id = a.requester_id
+			LEFT JOIN users u2 ON u2.id = a.approver_id
+			WHERE a.approver_id = $1
+			   OR a.approval_type = 'work_report'
+			ORDER BY a.created_at DESC`, userID)
+	} else {
+		// Employee sees only their own approvals
+		rows, err = c.DB.Query(`
+			SELECT a.id, a.title, a.approval_type, a.requester_id, COALESCE(u1.name,''),
+			       COALESCE(a.approver_id::text,''), COALESCE(u2.name,''),
+			       COALESCE(a.description,''), a.status, a.created_at
+			FROM approvals a
+			LEFT JOIN users u1 ON u1.id = a.requester_id
+			LEFT JOIN users u2 ON u2.id = a.approver_id
+			WHERE a.requester_id = $1
+			ORDER BY a.created_at DESC`, userID)
+	}
+
 	if err != nil {
 		utils.InternalError(w, err)
 		return
 	}
 	defer rows.Close()
+
 	var approvals []models.Approval
 	for rows.Next() {
 		var a models.Approval
@@ -49,11 +76,20 @@ func (c *ApprovalController) CreateApproval(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	// For work reports with no approver, find first admin
+	if req.ApproverID == "" || req.ApprovalType == "work_report" {
+		var adminID string
+		c.DB.QueryRow(`SELECT id FROM users WHERE LOWER(user_role)='admin' LIMIT 1`).Scan(&adminID)
+		if adminID != "" {
+			req.ApproverID = adminID
+		}
+	}
+
 	var a models.Approval
 	err := c.DB.QueryRow(`
-		INSERT INTO approvals (title,approval_type,requester_id,approver_id,description,status)
-		VALUES ($1,$2,$3,$4,$5,'pending')
-		RETURNING id,title,approval_type,requester_id,status,created_at`,
+		INSERT INTO approvals (title, approval_type, requester_id, approver_id, description, status)
+		VALUES ($1, $2, $3, $4, $5, 'pending')
+		RETURNING id, title, approval_type, requester_id, status, created_at`,
 		req.Title, req.ApprovalType, userID, req.ApproverID, req.Description,
 	).Scan(&a.ID, &a.Title, &a.ApprovalType, &a.RequesterID, &a.Status, &a.CreatedAt)
 	if err != nil {
@@ -65,13 +101,30 @@ func (c *ApprovalController) CreateApproval(w http.ResponseWriter, r *http.Reque
 	var requesterName string
 	c.DB.QueryRow(`SELECT name FROM users WHERE id=$1`, userID).Scan(&requesterName)
 
-	// Notify the approver (admin) about the new request
-	if req.ApproverID != "" {
+	// ✅ For work reports — notify ALL admins
+	if req.ApprovalType == "work_report" {
+		adminRows, _ := c.DB.Query(`SELECT id FROM users WHERE LOWER(user_role)='admin'`)
+		if adminRows != nil {
+			defer adminRows.Close()
+			for adminRows.Next() {
+				var adminID string
+				adminRows.Scan(&adminID)
+				c.DB.Exec(`
+					INSERT INTO notifications (user_id, title, body, notification_type)
+					VALUES ($1, $2, $3, 'approval')`,
+					adminID,
+					"📋 Work Report from "+requesterName,
+					requesterName+" submitted their daily work report",
+				)
+			}
+		}
+	} else if req.ApproverID != "" {
+		// For leave requests — notify the specific admin
 		c.DB.Exec(`
-			INSERT INTO notifications (user_id, title, message, notification_type)
+			INSERT INTO notifications (user_id, title, body, notification_type)
 			VALUES ($1, $2, $3, 'approval')`,
 			req.ApproverID,
-			"New Approval Request 📋",
+			"New "+req.ApprovalType+" Request 📋",
 			requesterName+" sent a "+req.ApprovalType+" request: "+req.Title,
 		)
 	}
@@ -109,7 +162,7 @@ func (c *ApprovalController) UpdateStatus(w http.ResponseWriter, r *http.Request
 	// Update status
 	c.DB.Exec(`UPDATE approvals SET status=$1, updated_at=NOW() WHERE id=$2`, req.Status, id)
 
-	// Notify the requester (employee) about the decision
+	// Notify the requester about the decision
 	if requesterID != "" && requesterID != userID {
 		var notifTitle, notifMsg string
 		if req.Status == "approved" {
@@ -121,7 +174,7 @@ func (c *ApprovalController) UpdateStatus(w http.ResponseWriter, r *http.Request
 		}
 		if notifTitle != "" {
 			c.DB.Exec(`
-				INSERT INTO notifications (user_id, title, message, notification_type)
+				INSERT INTO notifications (user_id, title, body, notification_type)
 				VALUES ($1, $2, $3, 'approval')`,
 				requesterID, notifTitle, notifMsg,
 			)

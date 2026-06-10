@@ -50,8 +50,10 @@ class _AdminTasksScreenState extends State<AdminTasksScreen>
       if (mounted)
         setState(() {
           _tasks = results[0] as List<TaskModel>;
-          _employees =
-              (results[1] as List<UserModel>).where((u) => !u.isAdmin).toList();
+          _employees = (results[1] as List<UserModel>)
+              .where(
+                  (u) => u.id != (context.read<AuthProvider>().user?.id ?? ''))
+              .toList();
           _approvals = results[2] as List<ApprovalModel>;
           _loading = false;
         });

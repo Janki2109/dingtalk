@@ -32,6 +32,8 @@ func main() {
 
 	// Init realtime signaling hub
 	wsig.GlobalSigHub = wsig.NewSigHub(db)
+	// ✅ ADD THIS LINE:
+	wsig.DB = db
 
 	// Setup routes
 	handler := routes.Setup(db)

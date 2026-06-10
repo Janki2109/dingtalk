@@ -5,7 +5,6 @@ import 'package:geolocator/geolocator.dart';
 import 'package:provider/provider.dart';
 import '../../../data/services/api_service.dart';
 import '../../../data/services/auth_provider.dart';
-import '../../admin/screens/admin_attendance_screen.dart';
 
 const double _officeLat = 19.08418593557618;
 const double _officeLng = 73.01567975767158;
@@ -62,7 +61,6 @@ class _AttendanceScreenState extends State<AttendanceScreen>
         .animate(CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut));
     _loadAttendance();
     _loadLeaveRequests();
-    // Auto-refresh every 5 seconds
     _refreshTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       if (mounted) _loadLeaveRequests();
     });
@@ -111,6 +109,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
       final approvals = await ApiService.getApprovals();
       if (mounted) {
         setState(() {
+          // ✅ FIX: Only show non-work_report approvals in leave tab
           _leaveRequests = approvals
               .where((a) => a.approvalType != 'work_report')
               .map((a) => {
@@ -372,6 +371,8 @@ class _AttendanceScreenState extends State<AttendanceScreen>
                                   }
                                   setS(() => submitting = true);
                                   try {
+                                    // ✅ FIX: Send work report to backend
+                                    // approver_id is empty — backend will find admin automatically
                                     await ApiService.createApproval({
                                       'title':
                                           'Work Report - ${user?.name ?? 'Employee'}',
@@ -379,19 +380,12 @@ class _AttendanceScreenState extends State<AttendanceScreen>
                                       'description': taskList.join('\n'),
                                     });
                                   } catch (_) {}
-                                  final now = DateTime.now();
-                                  TodoStore.submissions.insert(0, {
-                                    'employee': user?.name ?? 'Employee',
-                                    'employeeId': user?.id ?? '',
-                                    'date': _fmtDate(now),
-                                    'checkOut': _fmtTime(now),
-                                    'tasks': taskList,
-                                    'acknowledged': false,
-                                    'submittedAt': now.toIso8601String(),
-                                  });
+
                                   try {
                                     await ApiService.checkOut();
                                   } catch (_) {}
+
+                                  final now = DateTime.now();
                                   if (mounted) {
                                     setState(() {
                                       _checkOutTime = now;
@@ -690,7 +684,7 @@ class _AttendanceScreenState extends State<AttendanceScreen>
                         if (context.mounted) Navigator.pop(context);
                         _snack('📋 Leave sent to $approverName!',
                             const Color(0xFF6C63FF));
-                        _loadLeaveRequests(); // Reload immediately
+                        _loadLeaveRequests();
                       } catch (e) {
                         _snack('Failed: $e', Colors.red);
                       }

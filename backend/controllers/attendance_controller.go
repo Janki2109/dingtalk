@@ -10,7 +10,9 @@ import (
 
 type AttendanceController struct{ DB *sql.DB }
 
-func NewAttendanceController(db *sql.DB) *AttendanceController { return &AttendanceController{DB: db} }
+func NewAttendanceController(db *sql.DB) *AttendanceController {
+	return &AttendanceController{DB: db}
+}
 
 func (c *AttendanceController) GetHistory(w http.ResponseWriter, r *http.Request) {
 	userID := r.Header.Get("X-User-ID")
