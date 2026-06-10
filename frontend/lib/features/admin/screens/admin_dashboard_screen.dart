@@ -32,16 +32,20 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
         ApiService.getApprovals(),
         ApiService.getTasks(),
       ]);
-      if (mounted)
+      if (mounted) {
+        // ✅ FIX: Show all users except current admin
+        final currentId = context.read<AuthProvider>().user?.id ?? '';
         setState(() {
-          _employees =
-              (results[0] as List<UserModel>).where((u) => !u.isAdmin).toList();
+          _employees = (results[0] as List<UserModel>)
+              .where((u) => u.id != currentId)
+              .toList();
           _pending = (results[1] as List<ApprovalModel>)
               .where((a) => a.status == 'pending')
               .toList();
           _tasks = results[2] as List<TaskModel>;
           _loading = false;
         });
+      }
     } catch (_) {
       if (mounted) setState(() => _loading = false);
     }
@@ -155,7 +159,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                     ),
                     const SizedBox(height: 20),
 
-                    // Team Status
+                    // Team Members
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 16),
                       child: Row(children: [
@@ -177,58 +181,82 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                       ]),
                     ),
                     const SizedBox(height: 10),
-                    ..._employees.map((e) => Container(
-                          margin: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 4),
-                          padding: const EdgeInsets.all(14),
-                          decoration: BoxDecoration(
-                              color: AppColors.surface,
-                              borderRadius: BorderRadius.circular(14),
-                              border: Border.all(color: AppColors.border)),
-                          child: Row(children: [
-                            UserAvatar(
-                                name: e.name, size: 44, status: e.status),
-                            const SizedBox(width: 12),
-                            Expanded(
-                                child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                  Text(e.name,
-                                      style: const TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w700)),
-                                  Text('${e.role} · ${e.department}',
-                                      style: const TextStyle(
-                                          fontSize: 12,
-                                          color: AppColors.textMuted)),
-                                  Text(e.email,
-                                      style: const TextStyle(
-                                          fontSize: 11,
-                                          color: AppColors.textMuted)),
-                                ])),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 10, vertical: 4),
-                              decoration: BoxDecoration(
-                                  color: (e.status == 'online'
-                                          ? AppColors.online
-                                          : AppColors.offline)
-                                      .withOpacity(0.1),
-                                  borderRadius: BorderRadius.circular(20)),
-                              child: Text(
-                                  e.status == 'online'
-                                      ? '🟢 Online'
-                                      : '⚫ Offline',
-                                  style: TextStyle(
-                                      fontSize: 11,
-                                      fontWeight: FontWeight.w600,
-                                      color: e.status == 'online'
-                                          ? AppColors.online
-                                          : AppColors.offline)),
-                            ),
-                          ]),
-                        )),
+
+                    if (_employees.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.all(32),
+                        child: Column(children: [
+                          Icon(Icons.people_outline,
+                              size: 56,
+                              color: AppColors.textMuted.withOpacity(0.3)),
+                          const SizedBox(height: 12),
+                          const Text('No team members yet',
+                              style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.textSecondary)),
+                          const SizedBox(height: 6),
+                          const Text(
+                              'Users will appear here when they register',
+                              style: TextStyle(
+                                  fontSize: 12, color: AppColors.textMuted)),
+                        ]),
+                      )
+                    else
+                      ..._employees.map((e) => Container(
+                            margin: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 4),
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                                color: AppColors.surface,
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(color: AppColors.border)),
+                            child: Row(children: [
+                              UserAvatar(
+                                  name: e.name, size: 44, status: e.status),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                  child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                    Text(e.name,
+                                        style: const TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.w700)),
+                                    Text(
+                                        '${e.role.isNotEmpty ? e.role : 'Employee'} · ${e.department.isNotEmpty ? e.department : 'General'}',
+                                        style: const TextStyle(
+                                            fontSize: 12,
+                                            color: AppColors.textMuted)),
+                                    Text(e.email,
+                                        style: const TextStyle(
+                                            fontSize: 11,
+                                            color: AppColors.textMuted)),
+                                  ])),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 10, vertical: 4),
+                                decoration: BoxDecoration(
+                                    color: (e.status == 'online'
+                                            ? AppColors.online
+                                            : AppColors.offline)
+                                        .withOpacity(0.1),
+                                    borderRadius: BorderRadius.circular(20)),
+                                child: Text(
+                                    e.status == 'online'
+                                        ? '🟢 Online'
+                                        : '⚫ Offline',
+                                    style: TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w600,
+                                        color: e.status == 'online'
+                                            ? AppColors.online
+                                            : AppColors.offline)),
+                              ),
+                            ]),
+                          )),
+
                     const SizedBox(height: 20),
 
                     // Pending Approvals

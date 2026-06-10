@@ -4,8 +4,8 @@ import (
 	"database/sql"
 	"dingtalk/models"
 	"dingtalk/utils"
+	"fmt"
 	"net/http"
-	"time"
 )
 
 type UserController struct{ DB *sql.DB }
@@ -24,6 +24,7 @@ func (c *UserController) GetUsers(w http.ResponseWriter, r *http.Request) {
 		       last_seen
 		FROM users ORDER BY name`)
 	if err != nil {
+		fmt.Println("GetUsers query error:", err)
 		utils.InternalError(w, err)
 		return
 	}
@@ -32,7 +33,7 @@ func (c *UserController) GetUsers(w http.ResponseWriter, r *http.Request) {
 	var users []models.User
 	for rows.Next() {
 		var u models.User
-		var lastSeen sql.NullTime // handles NULL safely
+		var lastSeen sql.NullTime
 		err := rows.Scan(
 			&u.ID, &u.Name, &u.Email,
 			&u.Role, &u.Department, &u.Status,
@@ -41,6 +42,8 @@ func (c *UserController) GetUsers(w http.ResponseWriter, r *http.Request) {
 			&lastSeen,
 		)
 		if err != nil {
+			// ✅ Log error so we can see it in Render logs
+			fmt.Println("GetUsers scan error:", err)
 			continue
 		}
 		if lastSeen.Valid {
@@ -48,6 +51,10 @@ func (c *UserController) GetUsers(w http.ResponseWriter, r *http.Request) {
 		}
 		users = append(users, u)
 	}
+
+	// ✅ Log count so we can see in Render logs
+	fmt.Println("GetUsers found:", len(users), "users")
+
 	if users == nil {
 		users = []models.User{}
 	}
@@ -65,13 +72,11 @@ func (c *UserController) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Status == "offline" {
-		// Save last_seen timestamp when going offline
 		c.DB.Exec(`
 			UPDATE users
 			SET status=$1, last_seen=NOW(), updated_at=NOW()
 			WHERE id=$2`, req.Status, userID)
 	} else {
-		// Just update status when coming online
 		c.DB.Exec(`
 			UPDATE users
 			SET status=$1, updated_at=NOW()
@@ -114,6 +119,3 @@ func getUser(db *sql.DB, id string) *models.User {
 	}
 	return &u
 }
-
-// Keep time import used
-var _ = time.Now
