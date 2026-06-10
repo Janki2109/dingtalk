@@ -7,8 +7,6 @@ import (
 	"net/http"
 	"sync"
 	"time"
-
-	_ "github.com/lib/pq"
 )
 
 // ── Global DB reference ───────────────────────────────────────────────────────
@@ -17,11 +15,9 @@ var DB *sql.DB
 // ── Mutex for concurrent requests ────────────────────────────────────────────
 var mu sync.Mutex
 
-// ── HTTP Handlers ─────────────────────────────────────────────────────────────
-
 // POST /api/room/create
 func CreateInstantMeeting(w http.ResponseWriter, r *http.Request) {
-	setCORS(w)
+	roomCORS(w)
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusOK)
 		return
@@ -37,17 +33,15 @@ func CreateInstantMeeting(w http.ResponseWriter, r *http.Request) {
 		req.Title = "My Meeting"
 	}
 	if req.MeetingID == "" {
-		req.MeetingID = generateID()
+		req.MeetingID = newRoomID()
 	}
 
 	mu.Lock()
 	defer mu.Unlock()
 
-	// Check if room already exists
 	var existingID string
 	err := DB.QueryRow(`SELECT id FROM meeting_rooms WHERE id=$1 AND is_active=true`, req.MeetingID).Scan(&existingID)
 	if err == nil {
-		// Room exists — just return it
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"meeting_id":   existingID,
@@ -58,7 +52,6 @@ func CreateInstantMeeting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create new room in DB
 	_, err = DB.Exec(`
 		INSERT INTO meeting_rooms (id, title, host_id, host_name, is_active, created_at)
 		VALUES ($1, $2, $3, $4, true, NOW())
@@ -71,7 +64,6 @@ func CreateInstantMeeting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Add host as participant
 	DB.Exec(`
 		INSERT INTO room_participants (room_id, user_id, user_name, is_host, joined_at)
 		VALUES ($1, $2, $3, true, NOW())
@@ -89,7 +81,7 @@ func CreateInstantMeeting(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/room/join
 func JoinWaitingRoom(w http.ResponseWriter, r *http.Request) {
-	setCORS(w)
+	roomCORS(w)
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusOK)
 		return
@@ -104,7 +96,6 @@ func JoinWaitingRoom(w http.ResponseWriter, r *http.Request) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	// Check room exists
 	var hostID, hostName, title string
 	err := DB.QueryRow(`
 		SELECT host_id, host_name, title FROM meeting_rooms
@@ -118,7 +109,6 @@ func JoinWaitingRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If this is the host, admit directly
 	if hostID == req.UserID {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
@@ -129,7 +119,6 @@ func JoinWaitingRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if already admitted
 	var existingParticipant string
 	err = DB.QueryRow(`
 		SELECT user_id FROM room_participants
@@ -144,7 +133,6 @@ func JoinWaitingRoom(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Add to waiting room
 	DB.Exec(`
 		INSERT INTO room_waiting (room_id, user_id, user_name, asked_at)
 		VALUES ($1, $2, $3, NOW())
@@ -161,11 +149,10 @@ func JoinWaitingRoom(w http.ResponseWriter, r *http.Request) {
 
 // GET /api/room/status?meeting_id=XXX&user_id=YYY
 func CheckParticipantStatus(w http.ResponseWriter, r *http.Request) {
-	setCORS(w)
+	roomCORS(w)
 	meetingID := r.URL.Query().Get("meeting_id")
 	userID := r.URL.Query().Get("user_id")
 
-	// Check if room exists
 	var exists bool
 	DB.QueryRow(`SELECT EXISTS(SELECT 1 FROM meeting_rooms WHERE id=$1 AND is_active=true)`,
 		meetingID).Scan(&exists)
@@ -175,7 +162,6 @@ func CheckParticipantStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if admitted
 	var participantExists bool
 	DB.QueryRow(`SELECT EXISTS(SELECT 1 FROM room_participants WHERE room_id=$1 AND user_id=$2)`,
 		meetingID, userID).Scan(&participantExists)
@@ -185,7 +171,6 @@ func CheckParticipantStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if waiting
 	var waitingExists bool
 	DB.QueryRow(`SELECT EXISTS(SELECT 1 FROM room_waiting WHERE room_id=$1 AND user_id=$2)`,
 		meetingID, userID).Scan(&waitingExists)
@@ -201,10 +186,9 @@ func CheckParticipantStatus(w http.ResponseWriter, r *http.Request) {
 
 // GET /api/room/waiting?meeting_id=XXX
 func GetWaitingRoom(w http.ResponseWriter, r *http.Request) {
-	setCORS(w)
+	roomCORS(w)
 	meetingID := r.URL.Query().Get("meeting_id")
 
-	// Get waiting list
 	waitingRows, err := DB.Query(`
 		SELECT user_id, user_name, asked_at FROM room_waiting
 		WHERE room_id=$1 ORDER BY asked_at ASC`, meetingID)
@@ -223,7 +207,6 @@ func GetWaitingRoom(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Get participants list
 	partRows, err := DB.Query(`
 		SELECT user_id, user_name, is_host FROM room_participants
 		WHERE room_id=$1 ORDER BY joined_at ASC`, meetingID)
@@ -251,7 +234,7 @@ func GetWaitingRoom(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/room/admit
 func AdmitParticipant(w http.ResponseWriter, r *http.Request) {
-	setCORS(w)
+	roomCORS(w)
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusOK)
 		return
@@ -259,7 +242,7 @@ func AdmitParticipant(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		MeetingID string `json:"meeting_id"`
 		UserID    string `json:"user_id"`
-		Action    string `json:"action"` // "admit" or "deny"
+		Action    string `json:"action"`
 	}
 	json.NewDecoder(r.Body).Decode(&req)
 
@@ -267,12 +250,9 @@ func AdmitParticipant(w http.ResponseWriter, r *http.Request) {
 	defer mu.Unlock()
 
 	if req.Action == "admit" {
-		// Get user name from waiting room
 		var userName string
 		DB.QueryRow(`SELECT user_name FROM room_waiting WHERE room_id=$1 AND user_id=$2`,
 			req.MeetingID, req.UserID).Scan(&userName)
-
-		// Move from waiting to participants
 		DB.Exec(`DELETE FROM room_waiting WHERE room_id=$1 AND user_id=$2`,
 			req.MeetingID, req.UserID)
 		DB.Exec(`
@@ -281,7 +261,6 @@ func AdmitParticipant(w http.ResponseWriter, r *http.Request) {
 			ON CONFLICT (room_id, user_id) DO NOTHING`,
 			req.MeetingID, req.UserID, userName)
 	} else {
-		// Deny — just remove from waiting
 		DB.Exec(`DELETE FROM room_waiting WHERE room_id=$1 AND user_id=$2`,
 			req.MeetingID, req.UserID)
 	}
@@ -292,7 +271,7 @@ func AdmitParticipant(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/room/end
 func EndMeeting(w http.ResponseWriter, r *http.Request) {
-	setCORS(w)
+	roomCORS(w)
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusOK)
 		return
@@ -305,7 +284,6 @@ func EndMeeting(w http.ResponseWriter, r *http.Request) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	// Mark room inactive and clean up
 	DB.Exec(`UPDATE meeting_rooms SET is_active=false WHERE id=$1`, req.MeetingID)
 	DB.Exec(`DELETE FROM room_waiting WHERE room_id=$1`, req.MeetingID)
 	DB.Exec(`DELETE FROM room_participants WHERE room_id=$1`, req.MeetingID)
@@ -314,22 +292,27 @@ func EndMeeting(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ended"})
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-func generateID() string {
-	b := make([]byte, 6)
-	for i := range b {
-		b[i] = byte(time.Now().UnixNano()>>uint(i*8)) & 0xff
-	}
-	chars := "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-	r := make([]byte, 6)
-	for i, v := range b {
-		r[i] = chars[int(v)%32]
-	}
-	return string(r)
-}
-
-func setCORS(w http.ResponseWriter) {
+// ── roomCORS — unique name to avoid conflict with signaling.go ───────────────
+func roomCORS(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization")
 }
+
+// ── newRoomID — unique name to avoid conflict with signaling.go ──────────────
+func newRoomID() string {
+	b := make([]byte, 6)
+	now := time.Now().UnixNano()
+	for i := range b {
+		b[i] = byte(now >> uint(i*8))
+	}
+	chars := "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+	result := make([]byte, 6)
+	for i, v := range b {
+		result[i] = chars[int(v)%32]
+	}
+	return string(result)
+}
+
+// keep sql import used
+var _ = sql.ErrNoRows
