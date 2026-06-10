@@ -2,895 +2,528 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
-import '../../../core/constants/app_constants.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../data/models/app_models.dart';
 import '../../../data/services/api_service.dart';
 import '../../../data/services/auth_provider.dart';
 
-enum MeetingStatus { connecting, waiting, admitted, rejected, removed, ended }
+// ══════════════════════════════════════════════════════════════════════════════
+// REMOTE PARTICIPANT MODEL
+// ══════════════════════════════════════════════════════════════════════════════
 
-class WaitingPerson {
-  final String userId;
-  final String userName;
-  WaitingPerson({required this.userId, required this.userName});
-  factory WaitingPerson.fromJson(Map<String, dynamic> j) =>
-      WaitingPerson(userId: j['user_id'] ?? '', userName: j['user_name'] ?? '');
-}
-
-class RoomParticipant {
+class RemoteParticipant {
   final String userId;
   final String userName;
   final bool isHost;
-  RoomParticipant(
-      {required this.userId, required this.userName, required this.isHost});
-  factory RoomParticipant.fromJson(Map<String, dynamic> j) => RoomParticipant(
-      userId: j['user_id'] ?? '',
-      userName: j['user_name'] ?? '',
-      isHost: j['is_host'] ?? false);
-}
+  bool audioEnabled;
+  bool videoEnabled;
+  bool handRaised;
+  RTCPeerConnection? pc;
+  MediaStream? stream;
+  final RTCVideoRenderer renderer;
 
-class MeetingRoomService extends ChangeNotifier {
-  static const _base = AppConstants.serverUrl;
+  RemoteParticipant({
+    required this.userId,
+    required this.userName,
+    required this.isHost,
+    this.audioEnabled = true,
+    this.videoEnabled = true,
+    this.handRaised = false,
+  }) : renderer = RTCVideoRenderer();
 
-  MeetingStatus status = MeetingStatus.connecting;
-  List<WaitingPerson> waitingRoom = [];
-  List<RoomParticipant> participants = [];
-  String roomTitle = '';
-  String hostName = '';
-  String errorMessage = '';
+  Future<void> initRenderer() async => await renderer.initialize();
 
-  Timer? _pollTimer;
-  String _meetingId = '';
-  String _userId = '';
-  String _userName = '';
-  bool _isHost = false;
-
-  Future<void> connect({
-    required String meetingId,
-    required String userId,
-    required String userName,
-    required bool isHost,
-    required String title,
-  }) async {
-    _meetingId = meetingId;
-    _userId = userId;
-    _userName = userName;
-    _isHost = isHost;
-    roomTitle = title;
-    status = MeetingStatus.connecting;
-    errorMessage = '';
-    notifyListeners();
-    if (isHost) {
-      await _createRoom(title);
-    } else {
-      await _joinWaitingRoom();
-    }
-  }
-
-  Future<void> _createRoom(String title) async {
-    try {
-      final res = await http
-          .post(
-            Uri.parse('$_base/api/room/create'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'host_id': _userId,
-              'host_name': _userName,
-              'title': title,
-              'meeting_id': _meetingId,
-            }),
-          )
-          .timeout(const Duration(seconds: 15));
-
-      if (res.statusCode == 200 || res.statusCode == 201) {
-        // ✅ Host is admitted immediately
-        status = MeetingStatus.admitted;
-        notifyListeners();
-        _startPollingWaitingRoom();
-      } else {
-        // ✅ Don't end — show error but keep connecting
-        errorMessage = 'Could not create room (${res.statusCode})';
-        status = MeetingStatus.admitted; // Let host in anyway
-        notifyListeners();
-        _startPollingWaitingRoom();
-      }
-    } catch (e) {
-      // ✅ Network error — still let host in, meeting will work via Jitsi
-      errorMessage = 'Network error: $e';
-      status = MeetingStatus.admitted;
-      notifyListeners();
-    }
-  }
-
-  Future<void> _joinWaitingRoom() async {
-    try {
-      final res = await http
-          .post(
-            Uri.parse('$_base/api/room/join'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'meeting_id': _meetingId,
-              'user_id': _userId,
-              'user_name': _userName,
-            }),
-          )
-          .timeout(const Duration(seconds: 15));
-
-      if (res.statusCode == 404) {
-        // Host hasn't started yet — wait
-        status = MeetingStatus.waiting;
-        notifyListeners();
-        _startPollingStatus();
-        return;
-      }
-
-      final body = jsonDecode(res.body);
-      final joinStatus = body['status'] ?? '';
-      hostName = body['host_name'] ?? '';
-      roomTitle = body['title'] ?? roomTitle;
-
-      if (joinStatus == 'admitted') {
-        status = MeetingStatus.admitted;
-        notifyListeners();
-      } else {
-        status = MeetingStatus.waiting;
-        notifyListeners();
-        _startPollingStatus();
-      }
-    } catch (e) {
-      // Network error — keep waiting
-      status = MeetingStatus.waiting;
-      notifyListeners();
-      _startPollingStatus();
-    }
-  }
-
-  void _startPollingStatus() {
-    _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
-      if (status == MeetingStatus.admitted ||
-          status == MeetingStatus.rejected ||
-          status == MeetingStatus.removed ||
-          status == MeetingStatus.ended) {
-        _pollTimer?.cancel();
-        return;
-      }
-      await _checkStatus();
-    });
-  }
-
-  Future<void> _checkStatus() async {
-    try {
-      final res = await http
-          .get(
-            Uri.parse(
-                '$_base/api/room/status?meeting_id=$_meetingId&user_id=$_userId'),
-          )
-          .timeout(const Duration(seconds: 8));
-      final body = jsonDecode(res.body);
-      final s = body['status'] ?? '';
-      if (s == 'admitted') {
-        _pollTimer?.cancel();
-        status = MeetingStatus.admitted;
-        notifyListeners();
-      } else if (s == 'denied') {
-        _pollTimer?.cancel();
-        status = MeetingStatus.rejected;
-        notifyListeners();
-      }
-      // ✅ Don't end on 'not_found' — host might not have started yet
-    } catch (_) {}
-  }
-
-  void _startPollingWaitingRoom() {
-    _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
-      if (status == MeetingStatus.ended) {
-        _pollTimer?.cancel();
-        return;
-      }
-      await _fetchWaitingRoom();
-    });
-  }
-
-  Future<void> _fetchWaitingRoom() async {
-    try {
-      final res = await http
-          .get(
-            Uri.parse('$_base/api/room/waiting?meeting_id=$_meetingId'),
-          )
-          .timeout(const Duration(seconds: 8));
-      final body = jsonDecode(res.body);
-      waitingRoom = (body['waiting'] as List? ?? [])
-          .map((j) => WaitingPerson.fromJson(j))
-          .toList();
-      participants = (body['participants'] as List? ?? [])
-          .map((j) => RoomParticipant.fromJson(j))
-          .toList();
-      notifyListeners();
-    } catch (_) {}
-  }
-
-  Future<void> admitUser(String userId) async {
-    await _admitAction(userId, 'admit');
-    waitingRoom.removeWhere((w) => w.userId == userId);
-    notifyListeners();
-  }
-
-  Future<void> denyUser(String userId) async {
-    await _admitAction(userId, 'deny');
-    waitingRoom.removeWhere((w) => w.userId == userId);
-    notifyListeners();
-  }
-
-  Future<void> _admitAction(String userId, String action) async {
-    try {
-      await http
-          .post(
-            Uri.parse('$_base/api/room/admit'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'meeting_id': _meetingId,
-              'user_id': userId,
-              'action': action,
-            }),
-          )
-          .timeout(const Duration(seconds: 8));
-    } catch (_) {}
-  }
-
-  Future<void> endMeeting() async {
-    try {
-      await http
-          .post(
-            Uri.parse('$_base/api/room/end'),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'meeting_id': _meetingId}),
-          )
-          .timeout(const Duration(seconds: 8));
-    } catch (_) {}
-    _pollTimer?.cancel();
-    status = MeetingStatus.ended;
-    notifyListeners();
-  }
-
-  void leave() {
-    _pollTimer?.cancel();
-    status = MeetingStatus.ended;
-    notifyListeners();
-  }
-
-  @override
-  void dispose() {
-    _pollTimer?.cancel();
-    super.dispose();
+  Future<void> dispose() async {
+    await pc?.close();
+    await stream?.dispose();
+    await renderer.dispose();
   }
 }
 
-class MeetingRoomScreen extends StatefulWidget {
-  final String meetingId;
+class WaitingUser {
+  final String userId;
+  final String userName;
+  WaitingUser({required this.userId, required this.userName});
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// WEBRTC MEETING SCREEN
+// ══════════════════════════════════════════════════════════════════════════════
+
+class WebRTCMeetingScreen extends StatefulWidget {
   final String meetingCode;
-  final String inviteLink;
-  final bool isHost;
   final String meetingTitle;
-  final String userName;
+  final bool isHost;
 
-  const MeetingRoomScreen({
+  const WebRTCMeetingScreen({
     super.key,
-    this.meetingId = '',
-    this.meetingCode = '',
-    this.inviteLink = '',
-    this.isHost = false,
-    this.meetingTitle = 'Meeting',
-    this.userName = 'Guest',
+    required this.meetingCode,
+    required this.meetingTitle,
+    required this.isHost,
   });
 
   @override
-  State<MeetingRoomScreen> createState() => _MeetingRoomScreenState();
+  State<WebRTCMeetingScreen> createState() => _WebRTCMeetingScreenState();
 }
 
-class _MeetingRoomScreenState extends State<MeetingRoomScreen> {
-  late final MeetingRoomService _svc;
-  bool _initialized = false;
-  bool _jitsiLaunched = false;
+class _WebRTCMeetingScreenState extends State<WebRTCMeetingScreen> {
+  String _status = 'connecting';
+  String _myUserId = '';
+  String _myUserName = '';
+
+  WebSocketChannel? _channel;
+  StreamSubscription? _wsSub;
+
+  MediaStream? _localStream;
+  final RTCVideoRenderer _localRenderer = RTCVideoRenderer();
+  bool _audioEnabled = true;
+  bool _videoEnabled = true;
+  bool _frontCamera = true;
+
+  final Map<String, RemoteParticipant> _participants = {};
+  final List<WaitingUser> _waitingRoom = [];
+
+  final Map<String, dynamic> _iceConfig = {
+    'iceServers': [
+      {'urls': 'stun:stun.l.google.com:19302'},
+      {'urls': 'stun:stun1.l.google.com:19302'},
+    ]
+  };
 
   @override
   void initState() {
     super.initState();
-    _svc = MeetingRoomService();
-    _svc.addListener(_onUpdate);
     WidgetsBinding.instance.addPostFrameCallback((_) => _init());
   }
 
   Future<void> _init() async {
-    if (_initialized || !mounted) return;
-    _initialized = true;
     final auth = context.read<AuthProvider>();
-    await _svc.connect(
-      meetingId: widget.meetingCode,
-      userId: auth.user?.id ?? '',
-      userName: auth.user?.name ?? widget.userName,
-      isHost: widget.isHost,
-      title: widget.meetingTitle,
-    );
+    _myUserId = auth.user?.id ?? '';
+    _myUserName = auth.user?.name ?? 'Guest';
+    final token = await ApiService.getToken() ?? '';
+    await _localRenderer.initialize();
+    await _startLocalMedia();
+    await _connectWS(token);
   }
 
-  void _onUpdate() {
-    if (!mounted) return;
-    setState(() {});
-    // ✅ Launch Jitsi when admitted
-    if (_svc.status == MeetingStatus.admitted && !_jitsiLaunched) {
-      _jitsiLaunched = true;
-      _launchJitsi();
-    }
-    // ✅ Only auto-pop for removed — not for ended (let user see the screen)
-    if (_svc.status == MeetingStatus.removed) {
-      Future.delayed(const Duration(seconds: 2), () {
-        if (mounted) Navigator.pop(context);
+  Future<void> _startLocalMedia() async {
+    try {
+      _localStream = await navigator.mediaDevices.getUserMedia({
+        'audio': true,
+        'video': {'facingMode': 'user'},
       });
+      _localRenderer.srcObject = _localStream;
+      if (mounted) setState(() {});
+    } catch (e) {
+      debugPrint('Local media error: $e');
     }
   }
 
-  Future<void> _launchJitsi() async {
-    await Future.delayed(const Duration(milliseconds: 600));
-    if (!mounted) return;
-    final uri =
-        Uri.parse('https://meet.jit.si/WorkspacePro-${widget.meetingCode}');
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } else {
-      _snack('Could not open meeting. Install a browser.', AppColors.busy);
+  Future<void> _connectWS(String token) async {
+    final wsUrl =
+        'wss://dingtalk-1b41.onrender.com/ws?token=$token&room=${widget.meetingCode}&is_host=${widget.isHost}&name=${Uri.encodeComponent(_myUserName)}';
+    try {
+      _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
+      _wsSub = _channel!.stream.listen(
+        _onMessage,
+        onError: (e) => debugPrint('WS error: $e'),
+        onDone: () {
+          if (mounted && _status != 'ended') setState(() => _status = 'ended');
+        },
+      );
+      if (mounted)
+        setState(() => _status = widget.isHost ? 'admitted' : 'waiting');
+    } catch (e) {
+      debugPrint('WS connect error: $e');
+      if (mounted) setState(() => _status = 'admitted');
     }
+  }
+
+  void _send(Map<String, dynamic> msg) {
+    try {
+      _channel?.sink.add(jsonEncode(msg));
+    } catch (_) {}
+  }
+
+  void _onMessage(dynamic raw) async {
+    final msg = jsonDecode(raw as String) as Map<String, dynamic>;
+    final type = msg['type'] as String? ?? '';
+    switch (type) {
+      case 'waiting_room':
+        if (mounted) setState(() => _status = 'waiting');
+        break;
+      case 'admitted':
+        if (mounted) setState(() => _status = 'admitted');
+        break;
+      case 'existing_participants':
+        final list = msg['payload'] as List? ?? [];
+        for (final p in list) {
+          final uid = p['user_id'] as String;
+          if (uid != _myUserId) {
+            await _addParticipant(
+                uid, p['user_name'] ?? '', p['is_host'] ?? false);
+            await _createOffer(uid);
+          }
+        }
+        break;
+      case 'participants_update':
+        final list = msg['payload'] as List? ?? [];
+        for (final p in list) {
+          final uid = p['user_id'] as String;
+          if (uid != _myUserId && !_participants.containsKey(uid)) {
+            await _addParticipant(
+                uid, p['user_name'] ?? '', p['is_host'] ?? false);
+          }
+        }
+        if (mounted) setState(() {});
+        break;
+      case 'waiting_update':
+        final list = msg['payload'] as List? ?? [];
+        if (mounted)
+          setState(() {
+            _waitingRoom.clear();
+            for (final w in list) {
+              _waitingRoom.add(WaitingUser(
+                  userId: w['user_id'] ?? '', userName: w['user_name'] ?? ''));
+            }
+          });
+        break;
+      case 'participant_joined':
+        final p = msg['payload'] as Map<String, dynamic>? ?? {};
+        final uid = p['user_id'] as String? ?? '';
+        if (uid.isNotEmpty &&
+            uid != _myUserId &&
+            !_participants.containsKey(uid)) {
+          await _addParticipant(
+              uid, p['user_name'] ?? '', p['is_host'] ?? false);
+          await _createOffer(uid);
+          if (mounted) setState(() {});
+        }
+        break;
+      case 'participant_left':
+        final p = msg['payload'] as Map<String, dynamic>? ?? {};
+        await _removeParticipant(p['user_id'] as String? ?? '');
+        break;
+      case 'offer':
+        await _handleOffer(msg);
+        break;
+      case 'answer':
+        await _handleAnswer(msg);
+        break;
+      case 'ice_candidate':
+        await _handleIceCandidate(msg);
+        break;
+      case 'media_state_update':
+        final p = msg['payload'] as Map<String, dynamic>? ?? {};
+        final uid = p['user_id'] as String? ?? '';
+        if (_participants.containsKey(uid) && mounted)
+          setState(() {
+            if (p.containsKey('audio_enabled'))
+              _participants[uid]!.audioEnabled = p['audio_enabled'] as bool;
+            if (p.containsKey('video_enabled'))
+              _participants[uid]!.videoEnabled = p['video_enabled'] as bool;
+          });
+        break;
+      case 'muted':
+        if (mounted) setState(() => _audioEnabled = false);
+        _localStream?.getAudioTracks().forEach((t) => t.enabled = false);
+        _snack('You were muted by the host', AppColors.away);
+        break;
+      case 'video_disabled':
+        if (mounted) setState(() => _videoEnabled = false);
+        _localStream?.getVideoTracks().forEach((t) => t.enabled = false);
+        _snack('Your video was disabled by the host', AppColors.away);
+        break;
+      case 'removed':
+        _snack('You were removed from the meeting', AppColors.busy);
+        await _leaveMeeting();
+        break;
+      case 'rejected':
+        if (mounted) setState(() => _status = 'rejected');
+        break;
+      case 'meeting_ended':
+        _snack('Meeting ended by host', AppColors.busy);
+        await _leaveMeeting();
+        break;
+      case 'hand_raised':
+        final p = msg['payload'] as Map<String, dynamic>? ?? {};
+        final uid = p['user_id'] as String? ?? '';
+        if (_participants.containsKey(uid) && mounted) {
+          setState(() =>
+              _participants[uid]!.handRaised = p['raised'] as bool? ?? false);
+        }
+        break;
+    }
+  }
+
+  Future<void> _addParticipant(
+      String userId, String userName, bool isHost) async {
+    if (_participants.containsKey(userId)) return;
+    final p =
+        RemoteParticipant(userId: userId, userName: userName, isHost: isHost);
+    await p.initRenderer();
+    _participants[userId] = p;
+  }
+
+  Future<void> _removeParticipant(String userId) async {
+    final p = _participants.remove(userId);
+    await p?.dispose();
+    if (mounted) setState(() {});
+  }
+
+  Future<RTCPeerConnection> _createPC(String remoteUserId) async {
+    final pc = await createPeerConnection(_iceConfig);
+    _localStream
+        ?.getTracks()
+        .forEach((track) => pc.addTrack(track, _localStream!));
+    pc.onTrack = (event) {
+      if (event.streams.isNotEmpty && mounted)
+        setState(() {
+          if (_participants.containsKey(remoteUserId)) {
+            _participants[remoteUserId]!.renderer.srcObject = event.streams[0];
+            _participants[remoteUserId]!.stream = event.streams[0];
+          }
+        });
+    };
+    pc.onIceCandidate = (candidate) {
+      if (candidate.candidate != null) {
+        _send({
+          'type': 'ice_candidate',
+          'target_id': remoteUserId,
+          'candidate': {
+            'candidate': candidate.candidate,
+            'sdpMid': candidate.sdpMid,
+            'sdpMLineIndex': candidate.sdpMLineIndex,
+          },
+        });
+      }
+    };
+    return pc;
+  }
+
+  Future<void> _createOffer(String remoteUserId) async {
+    final p = _participants[remoteUserId];
+    if (p == null) return;
+    final pc = await _createPC(remoteUserId);
+    p.pc = pc;
+    final offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    _send({'type': 'offer', 'target_id': remoteUserId, 'sdp': offer.sdp});
+  }
+
+  Future<void> _handleOffer(Map<String, dynamic> msg) async {
+    final fromId = msg['from_id'] as String? ?? '';
+    final sdp = msg['sdp'] as String? ?? '';
+    if (fromId.isEmpty || sdp.isEmpty) return;
+    if (!_participants.containsKey(fromId))
+      await _addParticipant(fromId, fromId, false);
+    final p = _participants[fromId]!;
+    final pc = await _createPC(fromId);
+    p.pc = pc;
+    await pc.setRemoteDescription(RTCSessionDescription(sdp, 'offer'));
+    final answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    _send({'type': 'answer', 'target_id': fromId, 'sdp': answer.sdp});
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _handleAnswer(Map<String, dynamic> msg) async {
+    final fromId = msg['from_id'] as String? ?? '';
+    final sdp = msg['sdp'] as String? ?? '';
+    final p = _participants[fromId];
+    if (p?.pc == null) return;
+    await p!.pc!.setRemoteDescription(RTCSessionDescription(sdp, 'answer'));
+  }
+
+  Future<void> _handleIceCandidate(Map<String, dynamic> msg) async {
+    final fromId = msg['from_id'] as String? ?? '';
+    final candidateMap = msg['candidate'] as Map<String, dynamic>?;
+    if (candidateMap == null) return;
+    final p = _participants[fromId];
+    if (p?.pc == null) return;
+    await p!.pc!.addCandidate(RTCIceCandidate(
+      candidateMap['candidate'] as String?,
+      candidateMap['sdpMid'] as String?,
+      candidateMap['sdpMLineIndex'] as int?,
+    ));
+  }
+
+  void _toggleAudio() {
+    setState(() => _audioEnabled = !_audioEnabled);
+    _localStream?.getAudioTracks().forEach((t) => t.enabled = _audioEnabled);
+    _send({'type': 'media_state', 'audio_enabled': _audioEnabled});
+  }
+
+  void _toggleVideo() {
+    setState(() => _videoEnabled = !_videoEnabled);
+    _localStream?.getVideoTracks().forEach((t) => t.enabled = _videoEnabled);
+    _send({'type': 'media_state', 'video_enabled': _videoEnabled});
+  }
+
+  void _flipCamera() async {
+    setState(() => _frontCamera = !_frontCamera);
+    final tracks = _localStream?.getVideoTracks() ?? [];
+    for (final track in tracks) await Helper.switchCamera(track);
+  }
+
+  void _admitUser(String userId) {
+    _send({'type': 'admit_user', 'user_id': userId});
+    setState(() => _waitingRoom.removeWhere((w) => w.userId == userId));
+  }
+
+  void _rejectUser(String userId) {
+    _send({'type': 'reject_user', 'user_id': userId});
+    setState(() => _waitingRoom.removeWhere((w) => w.userId == userId));
+  }
+
+  void _muteUser(String userId) =>
+      _send({'type': 'mute_user', 'user_id': userId});
+  void _removeUser(String userId) =>
+      _send({'type': 'remove_participant', 'user_id': userId});
+
+  void _endMeeting() {
+    _send({'type': 'end_meeting'});
+    _leaveMeeting();
+  }
+
+  Future<void> _leaveMeeting() async {
+    if (mounted) setState(() => _status = 'ended');
+    await _cleanUp();
+    if (mounted) {
+      await Future.delayed(const Duration(milliseconds: 500));
+      Navigator.pop(context);
+    }
+  }
+
+  Future<void> _cleanUp() async {
+    _wsSub?.cancel();
+    _channel?.sink.close();
+    for (final p in _participants.values) await p.dispose();
+    _participants.clear();
+    await _localStream?.dispose();
+    await _localRenderer.dispose();
   }
 
   void _snack(String msg, Color color) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(msg, style: const TextStyle(fontWeight: FontWeight.w600)),
+      content: Text(msg),
       backgroundColor: color,
       behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
     ));
   }
 
   @override
   void dispose() {
-    _svc.removeListener(_onUpdate);
-    _svc.dispose();
+    _cleanUp();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    switch (_svc.status) {
-      case MeetingStatus.connecting:
+    switch (_status) {
+      case 'connecting':
         return _buildConnecting();
-      case MeetingStatus.waiting:
+      case 'waiting':
         return _buildWaiting();
-      case MeetingStatus.admitted:
-        return widget.isHost ? _buildHostRoom() : _buildAdmitted();
-      case MeetingStatus.rejected:
+      case 'rejected':
         return _buildRejected();
-      case MeetingStatus.removed:
-        return _buildRemoved();
-      case MeetingStatus.ended:
+      case 'ended':
         return _buildEnded();
+      default:
+        return _buildMeeting();
     }
   }
 
-  Widget _buildConnecting() {
-    final themeColor = context.read<AuthProvider>().themeColor;
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Center(
-          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-        Container(
-            width: 90,
-            height: 90,
-            decoration:
-                BoxDecoration(color: themeColor, shape: BoxShape.circle),
-            child: const Icon(Icons.videocam_rounded,
-                color: Colors.white, size: 44)),
-        const SizedBox(height: 28),
-        Text(widget.meetingTitle,
-            style: const TextStyle(
-                color: Colors.white,
-                fontSize: 22,
-                fontWeight: FontWeight.w800)),
-        const SizedBox(height: 10),
-        Text(widget.isHost ? 'Setting up your meeting…' : 'Connecting…',
-            style: const TextStyle(color: Colors.white70, fontSize: 15)),
-        const SizedBox(height: 32),
-        const CircularProgressIndicator(color: Colors.white),
-        const SizedBox(height: 32),
-        TextButton.icon(
-          onPressed: () => Navigator.pop(context),
-          icon: const Icon(Icons.cancel_outlined, color: Colors.white54),
-          label: const Text('Cancel', style: TextStyle(color: Colors.white54)),
-        ),
-      ])),
-    );
-  }
-
-  Widget _buildWaiting() {
-    final themeColor = context.read<AuthProvider>().themeColor;
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Center(
-          child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Container(
-              width: 110,
-              height: 110,
-              decoration: BoxDecoration(
-                  color: themeColor.withOpacity(0.15), shape: BoxShape.circle),
-              child: Icon(Icons.hourglass_top_rounded,
-                  color: themeColor, size: 56)),
-          const SizedBox(height: 32),
+  Widget _buildConnecting() => Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(
+            child:
+                Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+          const CircularProgressIndicator(color: Colors.white),
+          const SizedBox(height: 20),
           Text(widget.meetingTitle,
               style: const TextStyle(
                   color: Colors.white,
-                  fontSize: 22,
-                  fontWeight: FontWeight.w800),
-              textAlign: TextAlign.center),
-          const SizedBox(height: 12),
-          if (_svc.hostName.isNotEmpty)
-            Text('Hosted by ${_svc.hostName}',
-                style: const TextStyle(color: Colors.white54, fontSize: 14)),
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
-          const Text('Waiting for the host to let you in…',
-              style: TextStyle(color: Colors.white70, fontSize: 15),
-              textAlign: TextAlign.center),
-          const SizedBox(height: 40),
-          const CircularProgressIndicator(color: Colors.white),
-          const SizedBox(height: 40),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-            decoration: BoxDecoration(
-                color: Colors.white10,
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Colors.white24)),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              const Icon(Icons.tag_rounded, color: Colors.white54, size: 16),
-              const SizedBox(width: 8),
-              Text(widget.meetingCode,
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 22,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 4)),
-              const SizedBox(width: 12),
-              GestureDetector(
-                onTap: () {
-                  Clipboard.setData(ClipboardData(text: widget.meetingCode));
-                  _snack('Code copied!', themeColor);
-                },
-                child: const Icon(Icons.copy_rounded,
-                    color: Colors.white38, size: 18),
-              ),
-            ]),
-          ),
-          const SizedBox(height: 40),
-          TextButton.icon(
-            onPressed: () {
-              _svc.leave();
-              Navigator.pop(context);
-            },
-            icon: const Icon(Icons.cancel_outlined, color: Colors.white54),
-            label: const Text('Leave',
-                style: TextStyle(color: Colors.white54, fontSize: 15)),
-          ),
-        ]),
-      )),
-    );
-  }
-
-  Widget _buildAdmitted() {
-    final themeColor = context.read<AuthProvider>().themeColor;
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Center(
-          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-        Container(
-            width: 100,
-            height: 100,
-            decoration: BoxDecoration(
-                color: AppColors.online.withOpacity(0.15),
-                shape: BoxShape.circle),
-            child: const Icon(Icons.check_circle_rounded,
-                color: AppColors.online, size: 56)),
-        const SizedBox(height: 28),
-        const Text('You\'re in! 🎉',
-            style: TextStyle(
-                color: Colors.white,
-                fontSize: 22,
-                fontWeight: FontWeight.w800)),
-        const SizedBox(height: 10),
-        const Text('Opening meeting…',
-            style: TextStyle(color: Colors.white70, fontSize: 15)),
-        const SizedBox(height: 32),
-        CircularProgressIndicator(color: themeColor),
-        const SizedBox(height: 40),
-        OutlinedButton.icon(
-          onPressed: _launchJitsi,
-          icon: const Icon(Icons.open_in_new, color: Colors.white70, size: 16),
-          label: const Text('Open Meeting Manually',
-              style: TextStyle(color: Colors.white70)),
-          style: OutlinedButton.styleFrom(
-              side: const BorderSide(color: Colors.white24)),
-        ),
-        const SizedBox(height: 16),
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Go Back', style: TextStyle(color: Colors.white38)),
-        ),
-      ])),
-    );
-  }
-
-  Widget _buildHostRoom() {
-    final themeColor = context.read<AuthProvider>().themeColor;
-    final waitingCount = _svc.waitingRoom.length;
-    final participantCount = _svc.participants.length;
-    return Scaffold(
-      backgroundColor: const Color(0xFF0F0E1A),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF1A1A2E),
-        surfaceTintColor: Colors.transparent,
-        title: Row(children: [
-          Container(
-              width: 8,
-              height: 8,
-              decoration: const BoxDecoration(
-                  color: AppColors.online, shape: BoxShape.circle)),
-          const SizedBox(width: 8),
-          Expanded(
-              child: Text(widget.meetingTitle,
-                  style: const TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                      color: Colors.white),
-                  overflow: TextOverflow.ellipsis)),
-        ]),
-        actions: [
-          GestureDetector(
-            onTap: () {
-              Clipboard.setData(ClipboardData(text: widget.meetingCode));
-              _snack('Code copied!', themeColor);
-            },
-            child: Container(
-              margin: const EdgeInsets.only(right: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              decoration: BoxDecoration(
-                  color: themeColor.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: themeColor.withOpacity(0.4))),
-              child: Text(widget.meetingCode,
-                  style: TextStyle(
-                      color: themeColor,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 3)),
-            ),
-          ),
-        ],
-      ),
-      body: Column(children: [
-        Container(
-          color: const Color(0xFF1A1A2E),
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-          child: Row(children: [
-            _statChip(Icons.people_rounded, '$participantCount in meeting',
-                AppColors.online),
-            const SizedBox(width: 12),
-            if (waitingCount > 0)
-              _statChip(Icons.hourglass_empty_rounded, '$waitingCount waiting',
-                  AppColors.away),
-          ]),
-        ),
-        Expanded(
-            child: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
-          child:
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            if (_svc.waitingRoom.isNotEmpty) ...[
-              Row(children: [
-                Container(
-                    width: 8,
-                    height: 8,
-                    decoration: const BoxDecoration(
-                        color: AppColors.away, shape: BoxShape.circle)),
-                const SizedBox(width: 8),
-                Text('Waiting Room (${_svc.waitingRoom.length})',
-                    style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.away)),
-              ]),
-              const SizedBox(height: 10),
-              ..._svc.waitingRoom.map((p) => _buildWaitingCard(p, themeColor)),
-              const SizedBox(height: 20),
-            ],
-            Row(children: [
-              Container(
-                  width: 8,
-                  height: 8,
-                  decoration: const BoxDecoration(
-                      color: AppColors.online, shape: BoxShape.circle)),
-              const SizedBox(width: 8),
-              Text('In Meeting (${_svc.participants.length})',
-                  style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.online)),
-            ]),
-            const SizedBox(height: 10),
-            _buildParticipantCard(
-                name: 'You (Host)', isHost: true, color: themeColor),
-            ..._svc.participants.where((p) => !p.isHost).map((p) =>
-                _buildParticipantCard(
-                    name: p.userName, isHost: false, color: themeColor)),
-          ]),
-        )),
-        Container(
-          color: const Color(0xFF1A1A2E),
-          padding: EdgeInsets.fromLTRB(
-              16, 12, 16, MediaQuery.of(context).padding.bottom + 12),
-          child: Column(children: [
-            SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: _launchJitsi,
-                  icon: const Icon(Icons.videocam_rounded, size: 20),
-                  label: const Text('Join Video Call',
-                      style:
-                          TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
-                  style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.online,
-                      padding: const EdgeInsets.symmetric(vertical: 14)),
-                )),
-            const SizedBox(height: 8),
-            SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: _confirmEnd,
-                  icon: const Icon(Icons.call_end_rounded,
-                      color: AppColors.busy, size: 18),
-                  label: const Text('End Meeting for All',
-                      style: TextStyle(
-                          color: AppColors.busy, fontWeight: FontWeight.w700)),
-                  style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: AppColors.busy),
-                      padding: const EdgeInsets.symmetric(vertical: 12)),
-                )),
-          ]),
-        ),
-      ]),
-    );
-  }
-
-  Widget _statChip(IconData icon, String label, Color color) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: color.withOpacity(0.3))),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          Icon(icon, color: color, size: 14),
-          const SizedBox(width: 6),
-          Text(label,
-              style: TextStyle(
-                  color: color, fontSize: 12, fontWeight: FontWeight.w700)),
-        ]),
-      );
-
-  Widget _buildWaitingCard(WaitingPerson person, Color themeColor) => Container(
-        margin: const EdgeInsets.only(bottom: 10),
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-            color: AppColors.away.withOpacity(0.06),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: AppColors.away.withOpacity(0.3))),
-        child: Row(children: [
-          Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                  color: AppColors.away.withOpacity(0.15),
-                  shape: BoxShape.circle),
-              child: Center(
-                  child: Text(
-                person.userName.isNotEmpty
-                    ? person.userName[0].toUpperCase()
-                    : '?',
-                style: const TextStyle(
-                    color: AppColors.away,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800),
-              ))),
-          const SizedBox(width: 12),
-          Expanded(
-              child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                Text(person.userName,
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700)),
-                const Text('Waiting to join',
-                    style: TextStyle(color: Colors.white54, fontSize: 12)),
-              ])),
-          GestureDetector(
-            onTap: () => _svc.denyUser(person.userId),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-              decoration: BoxDecoration(
-                  color: AppColors.busy.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: AppColors.busy.withOpacity(0.4))),
-              child: const Text('Deny',
-                  style: TextStyle(
-                      color: AppColors.busy,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700)),
-            ),
-          ),
-          const SizedBox(width: 8),
-          GestureDetector(
-            onTap: () => _svc.admitUser(person.userId),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-              decoration: BoxDecoration(
-                  color: AppColors.online,
-                  borderRadius: BorderRadius.circular(8)),
-              child: const Text('Admit',
-                  style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700)),
-            ),
-          ),
-        ]),
-      );
-
-  Widget _buildParticipantCard(
-          {required String name, required bool isHost, required Color color}) =>
-      Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.04),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.white12)),
-        child: Row(children: [
-          Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                  color: color.withOpacity(0.15), shape: BoxShape.circle),
-              child: Center(
-                  child: Text(
-                name.isNotEmpty ? name[0].toUpperCase() : '?',
-                style: TextStyle(
-                    color: color, fontSize: 15, fontWeight: FontWeight.w800),
-              ))),
-          const SizedBox(width: 12),
-          Expanded(
-              child: Text(name,
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600))),
-          if (isHost)
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(
-                  color: AppColors.away.withOpacity(0.15),
-                  borderRadius: BorderRadius.circular(6)),
-              child: const Text('Host',
-                  style: TextStyle(
-                      color: AppColors.away,
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700)),
-            )
-          else
-            Container(
-                width: 8,
-                height: 8,
-                decoration: const BoxDecoration(
-                    color: AppColors.online, shape: BoxShape.circle)),
-        ]),
-      );
-
-  void _confirmEnd() {
-    showDialog(
-      context: context,
-      builder: (_) => AlertDialog(
-        backgroundColor: const Color(0xFF1A1A2E),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('End Meeting?',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-        content: const Text('This will end the meeting for all participants.',
-            style: TextStyle(color: Colors.white70)),
-        actions: [
+          const Text('Connecting…', style: TextStyle(color: Colors.white54)),
+          const SizedBox(height: 32),
           TextButton(
               onPressed: () => Navigator.pop(context),
               child: const Text('Cancel',
                   style: TextStyle(color: Colors.white54))),
-          ElevatedButton(
-            onPressed: () async {
-              Navigator.pop(context);
-              await _svc.endMeeting();
-              if (mounted) Navigator.pop(context);
-            },
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.busy),
-            child: const Text('End for All'),
-          ),
-        ],
-      ),
-    );
-  }
+        ])),
+      );
 
-  Widget _buildRejected() => Scaffold(
+  Widget _buildWaiting() => Scaffold(
         backgroundColor: Colors.black,
         body: Center(
             child: Padding(
           padding: const EdgeInsets.all(32),
           child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-            Container(
-                width: 100,
-                height: 100,
-                decoration: BoxDecoration(
-                    color: AppColors.busy.withOpacity(0.15),
-                    shape: BoxShape.circle),
-                child: const Icon(Icons.cancel_rounded,
-                    color: AppColors.busy, size: 52)),
-            const SizedBox(height: 28),
-            const Text('Request Declined',
-                style: TextStyle(
+            const Icon(Icons.hourglass_top_rounded,
+                color: Colors.orange, size: 64),
+            const SizedBox(height: 24),
+            Text(widget.meetingTitle,
+                style: const TextStyle(
                     color: Colors.white,
                     fontSize: 22,
-                    fontWeight: FontWeight.w700)),
-            const SizedBox(height: 12),
-            const Text('The host did not let you into this meeting.',
-                style: TextStyle(color: Colors.white54, fontSize: 14),
+                    fontWeight: FontWeight.w800),
                 textAlign: TextAlign.center),
-            const SizedBox(height: 40),
-            ElevatedButton(
-              onPressed: () => Navigator.pop(context),
-              style:
-                  ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
-              child: const Text('Go Back'),
+            const SizedBox(height: 12),
+            const Text('Waiting for the host to admit you…',
+                style: TextStyle(color: Colors.white70),
+                textAlign: TextAlign.center),
+            const SizedBox(height: 32),
+            const CircularProgressIndicator(color: Colors.white),
+            const SizedBox(height: 32),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+              decoration: BoxDecoration(
+                  color: Colors.white10,
+                  borderRadius: BorderRadius.circular(14)),
+              child: Text(widget.meetingCode,
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 24,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 6)),
+            ),
+            const SizedBox(height: 32),
+            TextButton.icon(
+              onPressed: () {
+                _channel?.sink.close();
+                Navigator.pop(context);
+              },
+              icon: const Icon(Icons.exit_to_app, color: Colors.white54),
+              label:
+                  const Text('Leave', style: TextStyle(color: Colors.white54)),
             ),
           ]),
         )),
       );
 
-  Widget _buildRemoved() => Scaffold(
+  Widget _buildRejected() => Scaffold(
         backgroundColor: Colors.black,
         body: Center(
             child:
                 Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-          const Icon(Icons.person_remove_rounded,
-              color: AppColors.busy, size: 64),
+          const Icon(Icons.cancel_rounded, color: AppColors.busy, size: 64),
           const SizedBox(height: 20),
-          const Text('You were removed',
+          const Text('Request Declined',
               style: TextStyle(
                   color: Colors.white,
                   fontSize: 20,
                   fontWeight: FontWeight.w700)),
           const SizedBox(height: 32),
           ElevatedButton(
-            onPressed: () => Navigator.pop(context),
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
-            child: const Text('Go Back'),
-          ),
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Go Back')),
         ])),
       );
 
@@ -908,13 +541,573 @@ class _MeetingRoomScreenState extends State<MeetingRoomScreen> {
                   fontWeight: FontWeight.w700)),
           const SizedBox(height: 32),
           ElevatedButton(
-            onPressed: () => Navigator.pop(context),
-            style: ElevatedButton.styleFrom(backgroundColor: AppColors.primary),
-            child: const Text('Go Back'),
-          ),
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Go Back')),
         ])),
       );
+
+  Widget _buildMeeting() {
+    final allParticipants = _participants.values.toList();
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: SafeArea(
+          child: Column(children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+          color: const Color(0xFF1A1A2E),
+          child: Row(children: [
+            Expanded(
+                child: Text(widget.meetingTitle,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700),
+                    overflow: TextOverflow.ellipsis)),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                  color: AppColors.online.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(20)),
+              child: Text('${allParticipants.length + 1} 👥',
+                  style: const TextStyle(
+                      color: AppColors.online,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700)),
+            ),
+            if (_waitingRoom.isNotEmpty) ...[
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: _showWaitingRoom,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                      color: AppColors.away.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(20)),
+                  child: Text('${_waitingRoom.length} waiting',
+                      style: const TextStyle(
+                          color: AppColors.away,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700)),
+                ),
+              ),
+            ],
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: () {
+                Clipboard.setData(ClipboardData(text: widget.meetingCode));
+                _snack('Code copied!', AppColors.online);
+              },
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                    color: Colors.white10,
+                    borderRadius: BorderRadius.circular(20)),
+                child: Text(widget.meetingCode,
+                    style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 2)),
+              ),
+            ),
+          ]),
+        ),
+        Expanded(
+            child: allParticipants.isEmpty
+                ? Center(
+                    child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                        Container(
+                            width: 120,
+                            height: 120,
+                            decoration: const BoxDecoration(
+                                color: Color(0xFF2A2A4A),
+                                shape: BoxShape.circle),
+                            child: Center(
+                                child: Text(
+                                    _myUserName.isNotEmpty
+                                        ? _myUserName[0].toUpperCase()
+                                        : 'Y',
+                                    style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 48,
+                                        fontWeight: FontWeight.w800)))),
+                        const SizedBox(height: 16),
+                        Text(_myUserName,
+                            style: const TextStyle(
+                                color: Colors.white70, fontSize: 16)),
+                        const SizedBox(height: 8),
+                        const Text('Waiting for others to join…',
+                            style:
+                                TextStyle(color: Colors.white38, fontSize: 13)),
+                      ]))
+                : GridView.builder(
+                    padding: const EdgeInsets.all(8),
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: allParticipants.length == 1 ? 1 : 2,
+                      childAspectRatio: 3 / 4,
+                      crossAxisSpacing: 8,
+                      mainAxisSpacing: 8,
+                    ),
+                    itemCount: allParticipants.length + 1,
+                    itemBuilder: (ctx, i) {
+                      if (i == 0) return _buildLocalTile();
+                      return _buildRemoteTile(allParticipants[i - 1]);
+                    },
+                  )),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+          color: const Color(0xFF1A1A2E),
+          child:
+              Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+            _ControlBtn(
+                icon: _audioEnabled ? Icons.mic_rounded : Icons.mic_off_rounded,
+                label: _audioEnabled ? 'Mute' : 'Unmute',
+                color: _audioEnabled ? Colors.white : AppColors.busy,
+                onTap: _toggleAudio),
+            _ControlBtn(
+                icon: _videoEnabled
+                    ? Icons.videocam_rounded
+                    : Icons.videocam_off_rounded,
+                label: _videoEnabled ? 'Video' : 'No Video',
+                color: _videoEnabled ? Colors.white : AppColors.busy,
+                onTap: _toggleVideo),
+            _ControlBtn(
+                icon: Icons.flip_camera_ios_rounded,
+                label: 'Flip',
+                color: Colors.white,
+                onTap: _flipCamera),
+            if (widget.isHost)
+              _ControlBtn(
+                  icon: Icons.people_rounded,
+                  label: 'People',
+                  color: Colors.white,
+                  onTap: _showParticipantsList,
+                  badge: _waitingRoom.isNotEmpty ? _waitingRoom.length : null),
+            _ControlBtn(
+                icon: Icons.call_end_rounded,
+                label: widget.isHost ? 'End' : 'Leave',
+                color: AppColors.busy,
+                bgColor: AppColors.busy,
+                onTap: widget.isHost ? _confirmEnd : () => _leaveMeeting()),
+          ]),
+        ),
+      ])),
+    );
+  }
+
+  Widget _buildLocalTile() => Container(
+        decoration: BoxDecoration(
+            color: const Color(0xFF2A2A4A),
+            borderRadius: BorderRadius.circular(12)),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Stack(fit: StackFit.expand, children: [
+            if (_videoEnabled && _localRenderer.srcObject != null)
+              RTCVideoView(_localRenderer,
+                  mirror: _frontCamera,
+                  objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover)
+            else
+              Center(
+                  child: Text(
+                      _myUserName.isNotEmpty
+                          ? _myUserName[0].toUpperCase()
+                          : 'Y',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 36,
+                          fontWeight: FontWeight.w800))),
+            Positioned(
+                bottom: 8,
+                left: 8,
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                      color: Colors.black54,
+                      borderRadius: BorderRadius.circular(8)),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    if (!_audioEnabled)
+                      const Icon(Icons.mic_off_rounded,
+                          color: AppColors.busy, size: 12),
+                    const SizedBox(width: 4),
+                    const Text('You',
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600)),
+                  ]),
+                )),
+          ]),
+        ),
+      );
+
+  Widget _buildRemoteTile(RemoteParticipant p) => GestureDetector(
+        onLongPress: widget.isHost ? () => _showParticipantOptions(p) : null,
+        child: Container(
+          decoration: BoxDecoration(
+              color: const Color(0xFF2A2A4A),
+              borderRadius: BorderRadius.circular(12)),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: Stack(fit: StackFit.expand, children: [
+              if (p.videoEnabled && p.renderer.srcObject != null)
+                RTCVideoView(p.renderer,
+                    objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover)
+              else
+                Center(
+                    child: Text(
+                        p.userName.isNotEmpty
+                            ? p.userName[0].toUpperCase()
+                            : '?',
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 36,
+                            fontWeight: FontWeight.w800))),
+              if (p.handRaised)
+                const Positioned(
+                    top: 8,
+                    right: 8,
+                    child: Text('✋', style: TextStyle(fontSize: 24))),
+              Positioned(
+                  bottom: 8,
+                  left: 8,
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                        color: Colors.black54,
+                        borderRadius: BorderRadius.circular(8)),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      if (!p.audioEnabled)
+                        const Icon(Icons.mic_off_rounded,
+                            color: AppColors.busy, size: 12),
+                      if (p.isHost)
+                        const Icon(Icons.star_rounded,
+                            color: AppColors.away, size: 12),
+                      const SizedBox(width: 4),
+                      Text(p.userName,
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600)),
+                    ]),
+                  )),
+            ]),
+          ),
+        ),
+      );
+
+  void _showWaitingRoom() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E1E2E),
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => Column(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+            width: 40,
+            height: 4,
+            margin: const EdgeInsets.only(top: 12, bottom: 8),
+            decoration: BoxDecoration(
+                color: Colors.white24, borderRadius: BorderRadius.circular(2))),
+        const Padding(
+            padding: EdgeInsets.all(16),
+            child: Text('Waiting Room',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700))),
+        ..._waitingRoom.map((w) => ListTile(
+              leading: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: const BoxDecoration(
+                      color: Color(0xFF2A2A4A), shape: BoxShape.circle),
+                  child: Center(
+                      child: Text(
+                          w.userName.isNotEmpty
+                              ? w.userName[0].toUpperCase()
+                              : '?',
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700)))),
+              title:
+                  Text(w.userName, style: const TextStyle(color: Colors.white)),
+              trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                TextButton(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      _rejectUser(w.userId);
+                    },
+                    child: const Text('Deny',
+                        style: TextStyle(color: AppColors.busy))),
+                ElevatedButton(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      _admitUser(w.userId);
+                    },
+                    style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.online),
+                    child: const Text('Admit')),
+              ]),
+            )),
+        const SizedBox(height: 16),
+      ]),
+    );
+  }
+
+  void _showParticipantsList() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E1E2E),
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      isScrollControlled: true,
+      builder: (_) => DraggableScrollableSheet(
+        initialChildSize: 0.6,
+        maxChildSize: 0.9,
+        minChildSize: 0.3,
+        expand: false,
+        builder: (ctx, scroll) => Column(children: [
+          Container(
+              width: 40,
+              height: 4,
+              margin: const EdgeInsets.only(top: 12, bottom: 8),
+              decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(2))),
+          Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Row(children: [
+                const Text('Participants',
+                    style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700)),
+                const Spacer(),
+                if (_waitingRoom.isNotEmpty)
+                  TextButton(
+                      onPressed: _showWaitingRoom,
+                      child: Text('${_waitingRoom.length} waiting',
+                          style: const TextStyle(color: AppColors.away))),
+              ])),
+          Expanded(
+              child: ListView(controller: scroll, children: [
+            ListTile(
+              leading: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: const BoxDecoration(
+                      color: Color(0xFF2A2A4A), shape: BoxShape.circle),
+                  child: Center(
+                      child: Text(
+                          _myUserName.isNotEmpty
+                              ? _myUserName[0].toUpperCase()
+                              : 'Y',
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w700)))),
+              title: Text('$_myUserName (You)',
+                  style: const TextStyle(color: Colors.white)),
+              trailing: const Icon(Icons.star_rounded,
+                  color: AppColors.away, size: 16),
+            ),
+            ..._participants.values.map((p) => ListTile(
+                  leading: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: const BoxDecoration(
+                          color: Color(0xFF2A2A4A), shape: BoxShape.circle),
+                      child: Center(
+                          child: Text(
+                              p.userName.isNotEmpty
+                                  ? p.userName[0].toUpperCase()
+                                  : '?',
+                              style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700)))),
+                  title: Text(p.userName,
+                      style: const TextStyle(color: Colors.white)),
+                  subtitle: Row(children: [
+                    Icon(
+                        p.audioEnabled
+                            ? Icons.mic_rounded
+                            : Icons.mic_off_rounded,
+                        size: 14,
+                        color:
+                            p.audioEnabled ? Colors.white54 : AppColors.busy),
+                    const SizedBox(width: 4),
+                    Icon(
+                        p.videoEnabled
+                            ? Icons.videocam_rounded
+                            : Icons.videocam_off_rounded,
+                        size: 14,
+                        color:
+                            p.videoEnabled ? Colors.white54 : AppColors.busy),
+                  ]),
+                  trailing: widget.isHost
+                      ? PopupMenuButton<String>(
+                          icon: const Icon(Icons.more_vert,
+                              color: Colors.white54),
+                          color: const Color(0xFF2A2A4A),
+                          onSelected: (val) {
+                            Navigator.pop(context);
+                            if (val == 'mute') _muteUser(p.userId);
+                            if (val == 'remove') _removeUser(p.userId);
+                          },
+                          itemBuilder: (_) => [
+                            const PopupMenuItem(
+                                value: 'mute',
+                                child: Text('Mute',
+                                    style: TextStyle(color: Colors.white))),
+                            const PopupMenuItem(
+                                value: 'remove',
+                                child: Text('Remove',
+                                    style: TextStyle(color: AppColors.busy))),
+                          ],
+                        )
+                      : null,
+                )),
+          ])),
+        ]),
+      ),
+    );
+  }
+
+  void _showParticipantOptions(RemoteParticipant p) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E1E2E),
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (_) => Column(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+            width: 40,
+            height: 4,
+            margin: const EdgeInsets.only(top: 12, bottom: 8),
+            decoration: BoxDecoration(
+                color: Colors.white24, borderRadius: BorderRadius.circular(2))),
+        Padding(
+            padding: const EdgeInsets.all(16),
+            child: Text(p.userName,
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700))),
+        ListTile(
+            leading: const Icon(Icons.mic_off_rounded, color: AppColors.away),
+            title: const Text('Mute', style: TextStyle(color: Colors.white)),
+            onTap: () {
+              Navigator.pop(context);
+              _muteUser(p.userId);
+            }),
+        ListTile(
+            leading:
+                const Icon(Icons.person_remove_rounded, color: AppColors.busy),
+            title: const Text('Remove from meeting',
+                style: TextStyle(color: AppColors.busy)),
+            onTap: () {
+              Navigator.pop(context);
+              _removeUser(p.userId);
+            }),
+        const SizedBox(height: 16),
+      ]),
+    );
+  }
+
+  void _confirmEnd() {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1A2E),
+        title:
+            const Text('End Meeting?', style: TextStyle(color: Colors.white)),
+        content: const Text('This will end the meeting for everyone.',
+            style: TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel',
+                  style: TextStyle(color: Colors.white54))),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _endMeeting();
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.busy),
+            child: const Text('End for All'),
+          ),
+        ],
+      ),
+    );
+  }
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CONTROL BUTTON WIDGET
+// ══════════════════════════════════════════════════════════════════════════════
+
+class _ControlBtn extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final Color? bgColor;
+  final VoidCallback onTap;
+  final int? badge;
+
+  const _ControlBtn(
+      {required this.icon,
+      required this.label,
+      required this.color,
+      required this.onTap,
+      this.bgColor,
+      this.badge});
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        child: Column(children: [
+          Stack(children: [
+            Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                    color: bgColor != null
+                        ? bgColor!.withOpacity(0.2)
+                        : Colors.white12,
+                    shape: BoxShape.circle),
+                child: Icon(icon, color: color, size: 24)),
+            if (badge != null)
+              Positioned(
+                  top: 0,
+                  right: 0,
+                  child: Container(
+                    width: 18,
+                    height: 18,
+                    decoration: const BoxDecoration(
+                        color: AppColors.busy, shape: BoxShape.circle),
+                    child: Center(
+                        child: Text('$badge',
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700))),
+                  )),
+          ]),
+          const SizedBox(height: 4),
+          Text(label,
+              style: TextStyle(color: color.withOpacity(0.8), fontSize: 11)),
+        ]),
+      );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// MEETING SCREEN (main tab)
+// ══════════════════════════════════════════════════════════════════════════════
 
 class MeetingScreen extends StatefulWidget {
   const MeetingScreen({super.key});
@@ -965,15 +1158,12 @@ class _MeetingScreenState extends State<MeetingScreen> {
     Navigator.push(
         context,
         MaterialPageRoute(
-            builder: (_) => MeetingRoomScreen(
-                  meetingId: meeting.id,
-                  meetingCode: meeting.code,
-                  inviteLink:
-                      'https://meet.jit.si/WorkspacePro-${meeting.code}',
-                  isHost: isHost,
-                  meetingTitle: meeting.title,
-                  userName: user?.name ?? 'Guest',
-                )));
+          builder: (_) => WebRTCMeetingScreen(
+            meetingCode: meeting.code,
+            meetingTitle: meeting.title,
+            isHost: isHost,
+          ),
+        ));
   }
 
   void _showNewMeeting(UserModel? user) {
@@ -1198,22 +1388,22 @@ class _MeetingScreenState extends State<MeetingScreen> {
                     borderRadius: BorderRadius.circular(2))),
             const SizedBox(height: 20),
             Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                  color: AppColors.online.withOpacity(0.08),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: AppColors.online.withOpacity(0.3))),
-              child: const Row(children: [
-                Icon(Icons.check_circle_rounded,
-                    color: AppColors.online, size: 24),
-                SizedBox(width: 10),
-                Text('Meeting Created! ✅',
-                    style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.online)),
-              ]),
-            ),
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                    color: AppColors.online.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(14),
+                    border:
+                        Border.all(color: AppColors.online.withOpacity(0.3))),
+                child: const Row(children: [
+                  Icon(Icons.check_circle_rounded,
+                      color: AppColors.online, size: 24),
+                  SizedBox(width: 10),
+                  Text('Meeting Created! ✅',
+                      style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.online)),
+                ])),
             const SizedBox(height: 20),
             const Text('MEETING CODE',
                 style: TextStyle(
@@ -1282,8 +1472,7 @@ class _MeetingScreenState extends State<MeetingScreen> {
             OutlinedButton.icon(
               onPressed: () {
                 final msg =
-                    '📹 Meeting Invite\nTitle: ${meeting.title}\nCode: ${meeting.code}\n\n'
-                    'Open WorkSpace Pro → Meetings → Join with Code → ${meeting.code}';
+                    '📹 Meeting Invite\nTitle: ${meeting.title}\nCode: ${meeting.code}\n\nOpen WorkSpace Pro → Meetings → Join with Code → ${meeting.code}';
                 Clipboard.setData(ClipboardData(text: msg));
                 _snack('✅ Invite copied!', AppColors.online);
               },
@@ -1372,9 +1561,8 @@ class _MeetingScreenState extends State<MeetingScreen> {
                               color: AppColors.primary),
                           onTap: () async {
                             Navigator.pop(context);
-                            final msg = '📹 Meeting Invite\n━━━━━━━━━━━━━━━━━\n'
-                                'Title: ${meeting.title}\nCode:  ${meeting.code}\n━━━━━━━━━━━━━━━━━\n'
-                                'Open WorkSpace Pro → Meetings → Join with Code → ${meeting.code}';
+                            final msg =
+                                '📹 Meeting Invite\n━━━━━━━━━━━━━━━━━\nTitle: ${meeting.title}\nCode:  ${meeting.code}\n━━━━━━━━━━━━━━━━━\nOpen WorkSpace Pro → Meetings → Join with Code → ${meeting.code}';
                             try {
                               await ApiService.sendMessage(chat.id, msg);
                               _snack('✅ Invite sent to ${chat.name}!',
@@ -1404,7 +1592,7 @@ class _MeetingScreenState extends State<MeetingScreen> {
             style: TextStyle(fontWeight: FontWeight.w800, fontSize: 22)),
         actions: [
           IconButton(
-              icon: const Icon(Icons.refresh, size: 20), onPressed: _load),
+              icon: const Icon(Icons.refresh, size: 20), onPressed: _load)
         ],
       ),
       body: Column(children: [
