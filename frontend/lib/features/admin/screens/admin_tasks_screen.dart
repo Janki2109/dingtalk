@@ -50,9 +50,10 @@ class _AdminTasksScreenState extends State<AdminTasksScreen>
       if (mounted)
         setState(() {
           _tasks = results[0] as List<TaskModel>;
+          // ✅ FIXED - shows all users except current admin
+          final currentId = context.read<AuthProvider>().user?.id ?? '';
           _employees = (results[1] as List<UserModel>)
-              .where(
-                  (u) => u.id != (context.read<AuthProvider>().user?.id ?? ''))
+              .where((u) => u.id != currentId)
               .toList();
           _approvals = results[2] as List<ApprovalModel>;
           _loading = false;
