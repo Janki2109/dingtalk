@@ -31,12 +31,21 @@ class ApiService {
     };
   }
 
+  static String _parseError(http.Response r) {
+    try {
+      final body = jsonDecode(r.body);
+      if (body is Map) {
+        return body['error'] ?? body['message'] ?? 'Error ${r.statusCode}';
+      }
+    } catch (_) {}
+    return 'Error ${r.statusCode}';
+  }
+
   static Future<dynamic> _get(String path) async {
     final r = await http
         .get(Uri.parse('$_base$path'), headers: await _headers())
-        .timeout(const Duration(seconds: 15));
-    if (r.statusCode >= 400)
-      throw Exception(jsonDecode(r.body)['error'] ?? 'Error ${r.statusCode}');
+        .timeout(const Duration(seconds: 30));
+    if (r.statusCode >= 400) throw Exception(_parseError(r));
     return jsonDecode(r.body);
   }
 
@@ -45,9 +54,8 @@ class ApiService {
     final r = await http
         .post(Uri.parse('$_base$path'),
             headers: await _headers(), body: jsonEncode(body))
-        .timeout(const Duration(seconds: 15));
-    if (r.statusCode >= 400)
-      throw Exception(jsonDecode(r.body)['error'] ?? 'Error ${r.statusCode}');
+        .timeout(const Duration(seconds: 30));
+    if (r.statusCode >= 400) throw Exception(_parseError(r));
     return jsonDecode(r.body);
   }
 
@@ -55,9 +63,8 @@ class ApiService {
     final r = await http
         .put(Uri.parse('$_base$path'),
             headers: await _headers(), body: jsonEncode(body))
-        .timeout(const Duration(seconds: 15));
-    if (r.statusCode >= 400)
-      throw Exception(jsonDecode(r.body)['error'] ?? 'Error ${r.statusCode}');
+        .timeout(const Duration(seconds: 30));
+    if (r.statusCode >= 400) throw Exception(_parseError(r));
     return jsonDecode(r.body);
   }
 
@@ -65,18 +72,16 @@ class ApiService {
     final r = await http
         .patch(Uri.parse('$_base$path'),
             headers: await _headers(), body: jsonEncode(body))
-        .timeout(const Duration(seconds: 15));
-    if (r.statusCode >= 400)
-      throw Exception(jsonDecode(r.body)['error'] ?? 'Error ${r.statusCode}');
+        .timeout(const Duration(seconds: 30));
+    if (r.statusCode >= 400) throw Exception(_parseError(r));
   }
 
   static Future<void> _delete(String path) async {
-    final token = await getToken();
-    final r = await http.delete(Uri.parse('$_base$path'), headers: {
-      'Content-Type': 'application/json',
-      if (token != null) 'Authorization': 'Bearer $token',
-    }).timeout(const Duration(seconds: 15));
-    if (r.statusCode >= 400) throw Exception('Error ${r.statusCode}');
+    final headers = await _headers();
+    final r = await http
+        .delete(Uri.parse('$_base$path'), headers: headers)
+        .timeout(const Duration(seconds: 30));
+    if (r.statusCode >= 400) throw Exception(_parseError(r));
   }
 
   // ── Auth ──────────────────────────────────────────────────────────────────
@@ -90,7 +95,7 @@ class ApiService {
         'email': email,
         'password': password,
         'role': role,
-        'department': dept
+        'department': dept,
       });
 
   static Future<UserModel> getMe() async {
@@ -162,7 +167,6 @@ class ApiService {
 
   static Future<void> markChatRead(String chatId) =>
       _patch('/chats/$chatId/read', {});
-
   static Future<void> deleteChat(String chatId) => _delete('/chats/$chatId');
 
   static Future<String> aiChat(String userId, String message) async {
@@ -182,6 +186,8 @@ class ApiService {
   }
 
   static Future<MeetingModel> getMeetingByCode(String code) async {
+    final token = await getToken();
+    if (token == null) throw Exception('Not logged in');
     final d = await _get('/meetings/code/${code.toUpperCase().trim()}');
     return MeetingModel.fromJson(d as Map<String, dynamic>);
   }
@@ -231,7 +237,6 @@ class ApiService {
 
   static Future<void> createTask(Map<String, dynamic> body) =>
       _post('/tasks', body);
-
   static Future<void> updateTaskStatus(String id, String status) =>
       _patch('/tasks/$id/status', {'status': status});
 
@@ -300,7 +305,7 @@ class ApiService {
       'name': name,
       'file_type': fileType,
       'size': size,
-      if (url.isNotEmpty) 'url': url
+      if (url.isNotEmpty) 'url': url,
     });
   }
 

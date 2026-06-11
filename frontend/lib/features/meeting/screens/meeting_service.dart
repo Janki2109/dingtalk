@@ -155,6 +155,11 @@ class MeetingService extends ChangeNotifier {
       _channel = WebSocketChannel.connect(uri);
       _sub = _channel!.stream.listen(_onMessage,
           onDone: _onDisconnect, onError: (_) => _onDisconnect());
+      // Host goes directly to meeting
+      if (isHost) {
+        status = MeetingStatus.inMeeting;
+        _notify();
+      }
     } catch (e) {
       debugPrint('WS error: $e');
       status = MeetingStatus.ended;
