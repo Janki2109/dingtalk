@@ -36,6 +36,11 @@ public final class GeneratedPluginRegistrant {
       Log.e(TAG, "Error registering plugin geolocator_android, com.baseflow.geolocator.GeolocatorPlugin", e);
     }
     try {
+      flutterEngine.getPlugins().add(new org.jitsi.jitsi_meet_flutter_sdk.JitsiMeetPlugin());
+    } catch (Exception e) {
+      Log.e(TAG, "Error registering plugin jitsi_meet_flutter_sdk, org.jitsi.jitsi_meet_flutter_sdk.JitsiMeetPlugin", e);
+    }
+    try {
       flutterEngine.getPlugins().add(new com.github.dart_lang.jni.JniPlugin());
     } catch (Exception e) {
       Log.e(TAG, "Error registering plugin jni, com.github.dart_lang.jni.JniPlugin", e);
