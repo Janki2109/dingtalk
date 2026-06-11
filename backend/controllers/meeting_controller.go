@@ -92,8 +92,8 @@ func (c *MeetingController) GetMeetings(w http.ResponseWriter, r *http.Request) 
 			"organizer_id": orgID, "organizer": orgName,
 			"start_time": start, "end_time": end,
 			"meeting_link": link, "code": code,
-			"invite_link":  jitsiLink,
-			"status":       status, "created_at": created,
+			"invite_link": jitsiLink,
+			"status":      status, "created_at": created,
 			"participants": parts,
 		})
 	}
@@ -168,19 +168,23 @@ func (c *MeetingController) CreateMeeting(w http.ResponseWriter, r *http.Request
 		"organizer_id": userID, "organizer": orgName,
 		"start_time": start, "end_time": end,
 		"meeting_link": link, "code": codeOut,
-		"invite_link":  jitsiLink,
-		"status":       status, "created_at": created,
+		"invite_link": jitsiLink,
+		"status":      status, "created_at": created,
 		"participants": participants,
 	})
 }
 
 func (c *MeetingController) GetMeetingByCode(w http.ResponseWriter, r *http.Request) {
-	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	code := ""
-	for i, p := range parts {
-		if p == "code" && i+1 < len(parts) {
-			code = parts[i+1]
-			break
+	// Extract code from path
+	code := r.PathValue("code")
+	if code == "" {
+		// fallback manual parse
+		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		for i, p := range parts {
+			if p == "code" && i+1 < len(parts) {
+				code = parts[i+1]
+				break
+			}
 		}
 	}
 	if code == "" {
@@ -219,8 +223,8 @@ func (c *MeetingController) GetMeetingByCode(w http.ResponseWriter, r *http.Requ
 		"organizer_id": orgID, "organizer": orgName,
 		"start_time": start, "end_time": end,
 		"meeting_link": link, "code": codeOut,
-		"invite_link":  jitsiLink,
-		"status":       status, "created_at": created,
+		"invite_link": jitsiLink,
+		"status":      status, "created_at": created,
 		"participants": []interface{}{},
 	})
 }
@@ -229,13 +233,70 @@ func (c *MeetingController) GetByCode(w http.ResponseWriter, r *http.Request) {
 	c.GetMeetingByCode(w, r)
 }
 
+// DeleteMeeting permanently deletes a meeting (organizer or admin only)
+func (c *MeetingController) DeleteMeeting(w http.ResponseWriter, r *http.Request) {
+	userID := r.Header.Get("X-User-ID")
+
+	// Get meeting ID from path
+	meetID := r.PathValue("id")
+	if meetID == "" {
+		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		for i, p := range parts {
+			if p == "meetings" && i+1 < len(parts) {
+				next := parts[i+1]
+				if next != "code" && next != "request" {
+					meetID = next
+					break
+				}
+			}
+		}
+	}
+	if meetID == "" {
+		utils.BadRequest(w, "missing meeting id")
+		return
+	}
+
+	// Check user is organizer or admin
+	var orgID string
+	var isAdmin bool
+	c.DB.QueryRow(`SELECT organizer_id FROM meetings WHERE id=$1`, meetID).Scan(&orgID)
+	c.DB.QueryRow(`SELECT LOWER(user_role)='admin' FROM users WHERE id=$1`, userID).Scan(&isAdmin)
+
+	if orgID != userID && !isAdmin {
+		utils.Error(w, http.StatusForbidden, "only organizer or admin can delete meetings")
+		return
+	}
+
+	// Delete related records first
+	c.DB.Exec(`DELETE FROM meeting_participants WHERE meeting_id=$1`, meetID)
+	c.DB.Exec(`DELETE FROM meeting_attendance WHERE meeting_id=$1`, meetID)
+	c.DB.Exec(`DELETE FROM notifications WHERE action_id=$1`, meetID)
+
+	// Delete the meeting
+	result, err := c.DB.Exec(`DELETE FROM meetings WHERE id=$1`, meetID)
+	if err != nil {
+		utils.InternalError(w, err)
+		return
+	}
+
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		utils.Error(w, http.StatusNotFound, "meeting not found")
+		return
+	}
+
+	utils.OK(w, map[string]string{"message": "meeting deleted"})
+}
+
 func (c *MeetingController) UpdateStatus(w http.ResponseWriter, r *http.Request) {
-	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	meetID := ""
-	for i, p := range parts {
-		if p == "meetings" && i+1 < len(parts) {
-			meetID = parts[i+1]
-			break
+	meetID := r.PathValue("id")
+	if meetID == "" {
+		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		for i, p := range parts {
+			if p == "meetings" && i+1 < len(parts) {
+				meetID = parts[i+1]
+				break
+			}
 		}
 	}
 	var req struct {
@@ -249,16 +310,17 @@ func (c *MeetingController) UpdateStatus(w http.ResponseWriter, r *http.Request)
 	utils.OK(w, map[string]string{"message": "updated"})
 }
 
-// InviteParticipants adds users to an existing meeting and notifies them
 func (c *MeetingController) InviteParticipants(w http.ResponseWriter, r *http.Request) {
-	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	meetID := ""
-	for i, p := range parts {
-		if p == "meetings" && i+1 < len(parts) {
-			next := parts[i+1]
-			if next != "code" && next != "request" {
-				meetID = next
-				break
+	meetID := r.PathValue("id")
+	if meetID == "" {
+		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		for i, p := range parts {
+			if p == "meetings" && i+1 < len(parts) {
+				next := parts[i+1]
+				if next != "code" && next != "request" {
+					meetID = next
+					break
+				}
 			}
 		}
 	}
@@ -282,7 +344,6 @@ func (c *MeetingController) InviteParticipants(w http.ResponseWriter, r *http.Re
 		WHERE m.id=$1`, meetID).Scan(&title, &code, &orgName)
 
 	jitsiLink := fmt.Sprintf("https://meet.jit.si/WorkspacePro-%s", code)
-
 	for _, pid := range req.ParticipantIDs {
 		c.DB.Exec(`INSERT INTO meeting_participants (meeting_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, meetID, pid)
 		body := fmt.Sprintf("%s invited you · Code: %s · %s", orgName, code, jitsiLink)
@@ -292,7 +353,6 @@ func (c *MeetingController) InviteParticipants(w http.ResponseWriter, r *http.Re
 	utils.OK(w, map[string]string{"message": "invited"})
 }
 
-// RequestMeeting lets a user notify admins to join their meeting
 func (c *MeetingController) RequestMeeting(w http.ResponseWriter, r *http.Request) {
 	userID := r.Header.Get("X-User-ID")
 	var req struct {
@@ -333,14 +393,15 @@ func (c *MeetingController) RequestMeeting(w http.ResponseWriter, r *http.Reques
 	utils.OK(w, map[string]interface{}{"message": "request sent", "admins_notified": count})
 }
 
-// GetParticipants returns the participant list for a meeting
 func (c *MeetingController) GetParticipants(w http.ResponseWriter, r *http.Request) {
-	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	meetID := ""
-	for i, p := range parts {
-		if p == "meetings" && i+1 < len(parts) {
-			meetID = parts[i+1]
-			break
+	meetID := r.PathValue("id")
+	if meetID == "" {
+		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		for i, p := range parts {
+			if p == "meetings" && i+1 < len(parts) {
+				meetID = parts[i+1]
+				break
+			}
 		}
 	}
 
@@ -371,17 +432,20 @@ func (c *MeetingController) GetParticipants(w http.ResponseWriter, r *http.Reque
 	utils.OK(w, participants)
 }
 
-// RemoveParticipant removes a user from a meeting (organizer only)
 func (c *MeetingController) RemoveParticipant(w http.ResponseWriter, r *http.Request) {
 	userID := r.Header.Get("X-User-ID")
-	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	var meetID, targetID string
-	for i, p := range parts {
-		if p == "meetings" && i+1 < len(parts) {
-			meetID = parts[i+1]
-		}
-		if p == "participants" && i+1 < len(parts) {
-			targetID = parts[i+1]
+	meetID := r.PathValue("id")
+	targetID := r.PathValue("userId")
+
+	if meetID == "" || targetID == "" {
+		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		for i, p := range parts {
+			if p == "meetings" && i+1 < len(parts) {
+				meetID = parts[i+1]
+			}
+			if p == "participants" && i+1 < len(parts) {
+				targetID = parts[i+1]
+			}
 		}
 	}
 	if meetID == "" || targetID == "" {

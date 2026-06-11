@@ -46,8 +46,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             id: 'n1',
             userId: 'me',
             title: 'Sprint Planning starting soon',
-            body:
-                'Alex Morgan invited you · Code: ABC123 · https://meet.jit.si/WorkspacePro-ABC123',
+            body: 'Alex Morgan invited you · Code: ABC123',
             type: 'meeting',
             createdAt: DateTime.now().subtract(const Duration(minutes: 5))),
         NotificationModel(
@@ -76,7 +75,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             id: 'n5',
             userId: 'me',
             title: 'Check-in reminder',
-            body: "Don't forget to check in today! Work starts at 9:00 AM",
+            body: "Don't forget to check in today!",
             type: 'attendance',
             isRead: true,
             createdAt: DateTime.now().subtract(const Duration(hours: 3))),
@@ -161,7 +160,6 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   }
 
   void _joinMeeting(String code) {
-    final user = context.read<AuthProvider>().user;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -176,6 +174,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                 builder: (_) => WebRTCMeetingScreen(
                   meetingCode: meeting.code,
                   meetingTitle: meeting.title,
+                  meetingId: meeting.id,
                   isHost: false,
                 ),
               ));
@@ -221,12 +220,11 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             SliverList(
                 delegate: SliverChildBuilderDelegate(
               (ctx, i) => _NotifTile(
-                notif: unread[i],
-                icon: _icon(unread[i].type),
-                color: _color(unread[i].type),
-                onMarkRead: () => _markRead(unread[i].id),
-                onJoinMeeting: _joinMeeting,
-              ),
+                  notif: unread[i],
+                  icon: _icon(unread[i].type),
+                  color: _color(unread[i].type),
+                  onMarkRead: () => _markRead(unread[i].id),
+                  onJoinMeeting: _joinMeeting),
               childCount: unread.length,
             )),
           ],
@@ -235,12 +233,11 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             SliverList(
                 delegate: SliverChildBuilderDelegate(
               (ctx, i) => _NotifTile(
-                notif: read[i],
-                icon: _icon(read[i].type),
-                color: _color(read[i].type),
-                onMarkRead: () => _markRead(read[i].id),
-                onJoinMeeting: _joinMeeting,
-              ),
+                  notif: read[i],
+                  icon: _icon(read[i].type),
+                  color: _color(read[i].type),
+                  onMarkRead: () => _markRead(read[i].id),
+                  onJoinMeeting: _joinMeeting),
               childCount: read.length,
             )),
           ],
@@ -264,13 +261,12 @@ class _NotifTile extends StatelessWidget {
   final VoidCallback onMarkRead;
   final Function(String) onJoinMeeting;
 
-  const _NotifTile({
-    required this.notif,
-    required this.icon,
-    required this.color,
-    required this.onMarkRead,
-    required this.onJoinMeeting,
-  });
+  const _NotifTile(
+      {required this.notif,
+      required this.icon,
+      required this.color,
+      required this.onMarkRead,
+      required this.onJoinMeeting});
 
   @override
   Widget build(BuildContext context) {
@@ -333,20 +329,16 @@ class _NotifTile extends StatelessWidget {
                           fontSize: 11, color: AppColors.textMuted)),
                 ])),
           ]),
-
-          // Meeting action area
           if (isMeetingWithCode) ...[
             const SizedBox(height: 10),
             Row(children: [
-              // Code chip
               Container(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                 decoration: BoxDecoration(
-                  color: color.withOpacity(0.08),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: color.withOpacity(0.2)),
-                ),
+                    color: color.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: color.withOpacity(0.2))),
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
                   Icon(Icons.tag_rounded, size: 12, color: color),
                   const SizedBox(width: 4),
@@ -359,7 +351,6 @@ class _NotifTile extends StatelessWidget {
                 ]),
               ),
               const SizedBox(width: 8),
-              // Join button
               Expanded(
                   child: ElevatedButton.icon(
                 onPressed: () => onJoinMeeting(code),
@@ -367,11 +358,10 @@ class _NotifTile extends StatelessWidget {
                 label:
                     const Text('Join Meeting', style: TextStyle(fontSize: 13)),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: color,
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8)),
-                ),
+                    backgroundColor: color,
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8))),
               )),
             ]),
           ],
@@ -381,7 +371,6 @@ class _NotifTile extends StatelessWidget {
   }
 }
 
-// ── Quick Join Sheet (opened from notification) ──────────────────────────────────
 class _QuickJoinSheet extends StatefulWidget {
   final String code;
   final Function(MeetingModel) onJoin;
@@ -424,9 +413,8 @@ class _QuickJoinSheetState extends State<_QuickJoinSheet> {
   Widget build(BuildContext context) {
     return Container(
       decoration: const BoxDecoration(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
+          color: AppColors.surface,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
       padding: const EdgeInsets.fromLTRB(24, 20, 24, 40),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
         Container(
@@ -453,9 +441,8 @@ class _QuickJoinSheetState extends State<_QuickJoinSheet> {
           SizedBox(
               width: double.infinity,
               child: ElevatedButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Close'),
-              )),
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('Close'))),
         ],
       ]),
     );

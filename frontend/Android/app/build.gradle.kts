@@ -15,7 +15,7 @@ android {
 
     defaultConfig {
         applicationId = "com.example.workspace_pro"
-        minSdk = flutter.minSdkVersion
+        minSdk = 26
         targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName

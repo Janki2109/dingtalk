@@ -70,6 +70,15 @@ class ApiService {
       throw Exception(jsonDecode(r.body)['error'] ?? 'Error ${r.statusCode}');
   }
 
+  static Future<void> _delete(String path) async {
+    final token = await getToken();
+    final r = await http.delete(Uri.parse('$_base$path'), headers: {
+      'Content-Type': 'application/json',
+      if (token != null) 'Authorization': 'Bearer $token',
+    }).timeout(const Duration(seconds: 15));
+    if (r.statusCode >= 400) throw Exception('Error ${r.statusCode}');
+  }
+
   // ── Auth ──────────────────────────────────────────────────────────────────
   static Future<Map<String, dynamic>> login(String email, String password) =>
       _post('/auth/login', {'email': email, 'password': password});
@@ -81,7 +90,7 @@ class ApiService {
         'email': email,
         'password': password,
         'role': role,
-        'department': dept,
+        'department': dept
       });
 
   static Future<UserModel> getMe() async {
@@ -154,18 +163,7 @@ class ApiService {
   static Future<void> markChatRead(String chatId) =>
       _patch('/chats/$chatId/read', {});
 
-  static Future<void> deleteChat(String chatId) async {
-    final token = await getToken();
-    final r = await http.delete(
-      Uri.parse('$_base/chats/$chatId'),
-      headers: {
-        'Content-Type': 'application/json',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
-    ).timeout(const Duration(seconds: 10));
-    if (r.statusCode >= 400)
-      throw Exception('Failed to delete chat: ${r.statusCode}');
-  }
+  static Future<void> deleteChat(String chatId) => _delete('/chats/$chatId');
 
   static Future<String> aiChat(String userId, String message) async {
     final d = await _post('/chat/ai', {'user_id': userId, 'message': message});
@@ -191,7 +189,8 @@ class ApiService {
   static Future<void> updateMeetingStatus(String id, String status) =>
       _patch('/meetings/$id/status', {'status': status});
 
-  // ── Meeting participants (graceful fallback if endpoint missing) ───────────
+  static Future<void> deleteMeeting(String id) => _delete('/meetings/$id');
+
   static Future<List<Map<String, dynamic>>> getMeetingParticipants(
       String meetingId) async {
     try {
@@ -301,18 +300,9 @@ class ApiService {
       'name': name,
       'file_type': fileType,
       'size': size,
-      if (url.isNotEmpty) 'url': url,
+      if (url.isNotEmpty) 'url': url
     });
   }
 
-  static Future<void> deleteFile(String id) async {
-    final token = await getToken();
-    await http.delete(
-      Uri.parse('${AppConstants.apiUrl}/files/$id'),
-      headers: {
-        'Content-Type': 'application/json',
-        if (token != null) 'Authorization': 'Bearer $token',
-      },
-    ).timeout(const Duration(seconds: 10));
-  }
+  static Future<void> deleteFile(String id) => _delete('/files/$id');
 }

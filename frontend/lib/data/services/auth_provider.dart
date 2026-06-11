@@ -10,6 +10,7 @@ class AuthProvider extends ChangeNotifier {
   UserModel? _user;
   bool _loading = false;
   String? _error;
+  String? _token;
   Color _themeColor = const Color(0xFF1A73E8);
   double _fontSize = 14.0;
   double _brightness = 1.0;
@@ -20,6 +21,7 @@ class AuthProvider extends ChangeNotifier {
   UserModel? get user => _user;
   bool get loading => _loading;
   String? get error => _error;
+  String? get token => _token;
   bool get isLoggedIn => _user != null;
   bool get isAdmin => _user?.isAdmin ?? false;
   bool get isEmployee => _user?.isEmployee ?? true;
@@ -42,6 +44,7 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
     try {
       final data = await ApiService.login(email, password);
+      _token = data['token'];
       await ApiService.saveToken(data['token']);
       _user = UserModel.fromJson(data['user']);
       _loading = false;
@@ -63,6 +66,7 @@ class AuthProvider extends ChangeNotifier {
     notifyListeners();
     try {
       final data = await ApiService.register(name, email, password, role, dept);
+      _token = data['token'];
       await ApiService.saveToken(data['token']);
       _user = UserModel.fromJson(data['user']);
       _loading = false;
@@ -81,6 +85,7 @@ class AuthProvider extends ChangeNotifier {
     await setOffline();
     await ApiService.logout();
     _user = null;
+    _token = null;
     notifyListeners();
   }
 
@@ -97,7 +102,7 @@ class AuthProvider extends ChangeNotifier {
             Uri.parse('${AppConstants.apiUrl}/users/status'),
             headers: {
               'Content-Type': 'application/json',
-              'Authorization': 'Bearer $token',
+              'Authorization': 'Bearer $token'
             },
             body: jsonEncode({'status': status}),
           )
@@ -110,9 +115,10 @@ class AuthProvider extends ChangeNotifier {
     final token = prefs.getString(AppConstants.tokenKey);
     if (token == null) return;
     try {
+      _token = token;
       _user = await ApiService.getMe();
       notifyListeners();
-      await setOnline(); // ← make sure this line exists
+      await setOnline();
     } catch (_) {
       await ApiService.clearToken();
     }
