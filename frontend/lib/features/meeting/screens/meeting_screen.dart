@@ -181,7 +181,7 @@ class _MeetingScreenState extends State<MeetingScreen> {
                                           uid: uid,
                                         )));
                           } catch (e) {
-                            setS(() => error = 'Meeting not found');
+                            setS(() => error = e.toString());
                           }
                         },
                         icon: const Icon(Icons.login_rounded),
