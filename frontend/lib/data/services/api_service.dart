@@ -189,6 +189,7 @@ class ApiService {
 
   static Future<MeetingModel> getMeetingByCode(String code) async {
     final token = await getToken();
+    print('TOKEN: $token'); // add this
     if (token == null) throw Exception('Not logged in');
     final d = await _get('/meetings/code/${code.toUpperCase().trim()}');
     return MeetingModel.fromJson(d as Map<String, dynamic>);

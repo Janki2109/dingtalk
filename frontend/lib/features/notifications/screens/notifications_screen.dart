@@ -5,7 +5,7 @@ import '../../../data/models/app_models.dart';
 import '../../../data/services/api_service.dart';
 import '../../../data/services/auth_provider.dart';
 import '../../../shared/widgets/app_widgets.dart';
-import '../../../features/meeting/screens/meeting_screen.dart';
+import '../../meeting/screens/agora_meeting_screen.dart';
 
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key});
@@ -160,6 +160,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   }
 
   void _joinMeeting(String code) {
+    final user = context.read<AuthProvider>().user;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -168,16 +169,17 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         code: code,
         onJoin: (meeting) {
           Navigator.pop(context);
+          final uid = meeting.code.hashCode.abs() & 0x7FFFFFFF;
           Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => WebRTCMeetingScreen(
-                  meetingCode: meeting.code,
-                  meetingTitle: meeting.title,
-                  meetingId: meeting.id,
-                  isHost: false,
-                ),
-              ));
+                  builder: (_) => AgoraMeetingScreen(
+                        channelName: meeting.code,
+                        meetingTitle: meeting.title,
+                        meetingId: meeting.id,
+                        isHost: meeting.organizerId == user?.id,
+                        uid: uid == 0 ? 1 : uid,
+                      )));
         },
       ),
     );
@@ -272,7 +274,6 @@ class _NotifTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final code = notif.meetingCode;
     final isMeetingWithCode = notif.type == 'meeting' && code != null;
-
     return GestureDetector(
       onTap: notif.isRead ? null : onMarkRead,
       child: Container(
@@ -410,41 +411,39 @@ class _QuickJoinSheetState extends State<_QuickJoinSheet> {
   }
 
   @override
-  Widget build(BuildContext context) {
-    return Container(
-      decoration: const BoxDecoration(
-          color: AppColors.surface,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      padding: const EdgeInsets.fromLTRB(24, 20, 24, 40),
-      child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Container(
-            width: 40,
-            height: 4,
-            decoration: BoxDecoration(
-                color: AppColors.border,
-                borderRadius: BorderRadius.circular(2))),
-        const SizedBox(height: 24),
-        if (_loading) ...[
-          const CircularProgressIndicator(),
-          const SizedBox(height: 16),
-          Text('Joining meeting ${widget.code}...',
-              style:
-                  const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-        ] else if (_error.isNotEmpty) ...[
-          const Icon(Icons.error_outline_rounded,
-              size: 48, color: AppColors.busy),
-          const SizedBox(height: 12),
-          Text(_error,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 15, color: AppColors.busy)),
-          const SizedBox(height: 16),
-          SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('Close'))),
-        ],
-      ]),
-    );
-  }
+  Widget build(BuildContext context) => Container(
+        decoration: const BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+        padding: const EdgeInsets.fromLTRB(24, 20, 24, 40),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                  color: AppColors.border,
+                  borderRadius: BorderRadius.circular(2))),
+          const SizedBox(height: 24),
+          if (_loading) ...[
+            const CircularProgressIndicator(),
+            const SizedBox(height: 16),
+            Text('Joining meeting ${widget.code}...',
+                style:
+                    const TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+          ] else if (_error.isNotEmpty) ...[
+            const Icon(Icons.error_outline_rounded,
+                size: 48, color: AppColors.busy),
+            const SizedBox(height: 12),
+            Text(_error,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 15, color: AppColors.busy)),
+            const SizedBox(height: 16),
+            SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Close'))),
+          ],
+        ]),
+      );
 }

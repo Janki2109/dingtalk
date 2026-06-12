@@ -6,7 +6,7 @@ import '../../../data/models/app_models.dart';
 import '../../../data/services/api_service.dart';
 import '../../../data/services/auth_provider.dart';
 import '../../../shared/widgets/app_widgets.dart';
-import '../../meeting/screens/meeting_screen.dart';
+import '../../meeting/screens/agora_meeting_screen.dart';
 
 class AdminMeetingsScreen extends StatefulWidget {
   const AdminMeetingsScreen({super.key});
@@ -52,47 +52,56 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
     ));
   }
 
+  int _generateUid(String userId) {
+    int hash = 0;
+    for (var c in userId.codeUnits) {
+      hash = (hash * 31 + c) & 0x7FFFFFFF;
+    }
+    return hash == 0 ? 1 : hash;
+  }
+
   void _openRoom(MeetingModel m, {required bool isHost}) {
+    final user = context.read<AuthProvider>().user;
+    final uid = _generateUid(user?.id ?? 'admin');
     Navigator.push(
         context,
         MaterialPageRoute(
-            builder: (_) => WebRTCMeetingScreen(
-                  meetingCode: m.code,
+            builder: (_) => AgoraMeetingScreen(
+                  channelName: m.code,
                   meetingTitle: m.title,
                   meetingId: m.id,
                   isHost: isHost,
+                  uid: uid,
                 )));
   }
 
   Future<void> _deleteMeeting(MeetingModel m) async {
     final confirm = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Delete Meeting?'),
-        content:
-            Text('Permanently delete "${m.title}"? This cannot be undone.'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel')),
-          ElevatedButton(
-              onPressed: () => Navigator.pop(context, true),
-              style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-              child: const Text('Delete')),
-        ],
-      ),
-    );
+        context: context,
+        builder: (_) => AlertDialog(
+              title: const Text('Delete Meeting?'),
+              content: Text('Permanently delete "${m.title}"?'),
+              actions: [
+                TextButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    child: const Text('Cancel')),
+                ElevatedButton(
+                    onPressed: () => Navigator.pop(context, true),
+                    style:
+                        ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                    child: const Text('Delete')),
+              ],
+            ));
     if (confirm != true) return;
     try {
       await ApiService.deleteMeeting(m.id);
-      _snack('Meeting deleted', Colors.red);
+      _snack('Deleted', Colors.red);
       _load();
     } catch (e) {
-      _snack('Failed to delete: $e', AppColors.busy);
+      _snack('Failed: $e', AppColors.busy);
     }
   }
 
-  // ── Host Meeting ──────────────────────────────────────────────────────────
   void _showHostMeeting() {
     final titleCtrl = TextEditingController(text: 'Team Meeting');
     bool loading = false;
@@ -200,7 +209,6 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
     );
   }
 
-  // ── Schedule Meeting ──────────────────────────────────────────────────────
   void _showSchedule() {
     final titleCtrl = TextEditingController();
     final descCtrl = TextEditingController();
@@ -404,7 +412,7 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
                                               start.toUtc().toIso8601String(),
                                           'end_time':
                                               end.toUtc().toIso8601String(),
-                                          'participant_ids': selectedIds,
+                                          'participant_ids': selectedIds
                                         });
                                         if (context.mounted)
                                           Navigator.pop(context);
@@ -440,7 +448,6 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
     );
   }
 
-  // ── Join with Code ────────────────────────────────────────────────────────
   void _showJoinWithCode() {
     final codeCtrl = TextEditingController();
     String error = '';
@@ -483,20 +490,19 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
                   ]),
                   const SizedBox(height: 20),
                   TextField(
-                    controller: codeCtrl,
-                    autofocus: true,
-                    textCapitalization: TextCapitalization.characters,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 8),
-                    decoration: InputDecoration(
-                        hintText: 'ABC123',
-                        errorText: error.isNotEmpty ? error : null,
-                        border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12))),
-                  ),
+                      controller: codeCtrl,
+                      autofocus: true,
+                      textCapitalization: TextCapitalization.characters,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 8),
+                      decoration: InputDecoration(
+                          hintText: 'ABC123',
+                          errorText: error.isNotEmpty ? error : null,
+                          border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12)))),
                   const SizedBox(height: 20),
                   SizedBox(
                       width: double.infinity,
@@ -511,15 +517,17 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
                             final meeting =
                                 await ApiService.getMeetingByCode(code);
                             if (context.mounted) Navigator.pop(context);
+                            final uid = _generateUid(user?.id ?? 'admin');
                             Navigator.push(
                                 context,
                                 MaterialPageRoute(
-                                    builder: (_) => WebRTCMeetingScreen(
-                                          meetingCode: meeting.code,
+                                    builder: (_) => AgoraMeetingScreen(
+                                          channelName: meeting.code,
                                           meetingTitle: meeting.title,
                                           meetingId: meeting.id,
                                           isHost:
                                               meeting.organizerId == user?.id,
+                                          uid: uid,
                                         )));
                           } catch (e) {
                             setS(() => error = 'Meeting not found');
@@ -536,7 +544,6 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
     );
   }
 
-  // ── Created popup ─────────────────────────────────────────────────────────
   void _showCreated(MeetingModel meeting) {
     bool codeCopied = false;
     showModalBottomSheet(
@@ -574,7 +581,7 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
                             style: TextStyle(
                                 fontSize: 15,
                                 fontWeight: FontWeight.w700,
-                                color: AppColors.online)),
+                                color: AppColors.online))
                       ])),
                   const SizedBox(height: 20),
                   const Text('MEETING CODE',
@@ -614,20 +621,20 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
                                   });
                                 },
                                 child: AnimatedContainer(
-                                  duration: const Duration(milliseconds: 200),
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 14, vertical: 8),
-                                  decoration: BoxDecoration(
-                                      color: codeCopied
-                                          ? AppColors.online
-                                          : auth.themeColor,
-                                      borderRadius: BorderRadius.circular(10)),
-                                  child: Text(codeCopied ? 'Copied!' : 'Copy',
-                                      style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w700)),
-                                ),
+                                    duration: const Duration(milliseconds: 200),
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 14, vertical: 8),
+                                    decoration: BoxDecoration(
+                                        color: codeCopied
+                                            ? AppColors.online
+                                            : auth.themeColor,
+                                        borderRadius:
+                                            BorderRadius.circular(10)),
+                                    child: Text(codeCopied ? 'Copied!' : 'Copy',
+                                        style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w700))),
                               ),
                             ]),
                           )),
@@ -642,7 +649,7 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
                         child: OutlinedButton.icon(
                       onPressed: () {
                         final msg =
-                            '📹 Meeting Invite\n━━━━━━━━━━━━━━━━━\nTitle: ${meeting.title}\nCode: ${meeting.code}\n━━━━━━━━━━━━━━━━━\nGo to Meetings → Join with Code → ${meeting.code}';
+                            '📹 Meeting Invite\nTitle: ${meeting.title}\nCode: ${meeting.code}\nJoin via WorkSpace Pro → Meetings → Join with Code';
                         Clipboard.setData(ClipboardData(text: msg));
                         _snack('✅ Invite copied!', AppColors.online);
                       },
@@ -763,20 +770,17 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
   Widget build(BuildContext context) {
     final themeColor = context.watch<AuthProvider>().themeColor;
     final user = context.watch<AuthProvider>().user;
-
     return Scaffold(
       backgroundColor: AppColors.bg,
       appBar: AppBar(
-        backgroundColor: AppColors.surface,
-        surfaceTintColor: Colors.transparent,
-        title: const Text('Meetings',
-            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 20)),
-        actions: [
-          IconButton(icon: const Icon(Icons.refresh), onPressed: _load)
-        ],
-      ),
+          backgroundColor: AppColors.surface,
+          surfaceTintColor: Colors.transparent,
+          title: const Text('Meetings',
+              style: TextStyle(fontWeight: FontWeight.w800, fontSize: 20)),
+          actions: [
+            IconButton(icon: const Icon(Icons.refresh), onPressed: _load)
+          ]),
       body: Column(children: [
-        // 3 buttons: Host, Schedule, Join with Code
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
           child: Row(children: [
@@ -802,8 +806,6 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
                     onTap: _showJoinWithCode)),
           ]),
         ),
-
-        // Meeting list
         Expanded(
           child: _loading
               ? const Center(child: CircularProgressIndicator())
@@ -976,22 +978,21 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
                                   )),
                                   const SizedBox(width: 8),
                                   GestureDetector(
-                                    onTap: () => _deleteMeeting(m),
-                                    child: Container(
-                                      padding: const EdgeInsets.all(8),
-                                      decoration: BoxDecoration(
-                                          color: Colors.red.withOpacity(0.1),
-                                          borderRadius:
-                                              BorderRadius.circular(8),
-                                          border: Border.all(
+                                      onTap: () => _deleteMeeting(m),
+                                      child: Container(
+                                          padding: const EdgeInsets.all(8),
+                                          decoration: BoxDecoration(
                                               color:
-                                                  Colors.red.withOpacity(0.3))),
-                                      child: const Icon(
-                                          Icons.delete_outline_rounded,
-                                          color: Colors.red,
-                                          size: 18),
-                                    ),
-                                  ),
+                                                  Colors.red.withOpacity(0.1),
+                                              borderRadius:
+                                                  BorderRadius.circular(8),
+                                              border: Border.all(
+                                                  color: Colors.red
+                                                      .withOpacity(0.3))),
+                                          child: const Icon(
+                                              Icons.delete_outline_rounded,
+                                              color: Colors.red,
+                                              size: 18))),
                                 ]),
                               ]),
                         );
