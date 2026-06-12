@@ -88,14 +88,16 @@ class ApiService {
   static Future<Map<String, dynamic>> login(String email, String password) =>
       _post('/auth/login', {'email': email, 'password': password});
 
-  static Future<Map<String, dynamic>> register(String name, String email,
-          String password, String role, String dept) =>
+  static Future<Map<String, dynamic>> register(
+          String name, String email, String password, String role, String dept,
+          {String userRole = 'employee'}) =>
       _post('/auth/register', {
         'name': name,
         'email': email,
         'password': password,
         'role': role,
         'department': dept,
+        'user_role': userRole,
       });
 
   static Future<UserModel> getMe() async {

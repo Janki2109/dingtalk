@@ -2,61 +2,74 @@ package controllers
 
 import (
 	"database/sql"
-	"dingtalk/models"
-	"dingtalk/utils"
-	"fmt"
+	"encoding/json"
 	"net/http"
+	"strings"
+
+	"dingtalk/utils"
 )
 
 type UserController struct{ DB *sql.DB }
 
-func NewUserController(db *sql.DB) *UserController { return &UserController{DB: db} }
+func NewUserController(db *sql.DB) *UserController {
+	return &UserController{DB: db}
+}
 
+// GetUsers returns only users from the same domain as the requester
 func (c *UserController) GetUsers(w http.ResponseWriter, r *http.Request) {
-	rows, err := c.DB.Query(`
-		SELECT id, name, email,
-		       COALESCE(role,''),
-		       COALESCE(department,''),
-		       COALESCE(status,'offline'),
-		       COALESCE(avatar_url,''),
-		       COALESCE(phone,''),
-		       COALESCE(user_role,'employee'),
-		       last_seen
-		FROM users ORDER BY name`)
+	userEmail := r.Header.Get("X-User-Email")
+	domain := extractDomain(userEmail)
+
+	var rows *sql.Rows
+	var err error
+
+	if domain == "" {
+		// fallback — return all (shouldn't happen)
+		rows, err = c.DB.Query(`
+			SELECT id, name, email, COALESCE(role,''), COALESCE(department,''),
+			       COALESCE(status,'offline'), COALESCE(avatar_url,''),
+			       COALESCE(phone,''), COALESCE(user_role,'employee'),
+			       COALESCE(bio,''), COALESCE(domain,'')
+			FROM users ORDER BY name`)
+	} else {
+		rows, err = c.DB.Query(`
+			SELECT id, name, email, COALESCE(role,''), COALESCE(department,''),
+			       COALESCE(status,'offline'), COALESCE(avatar_url,''),
+			       COALESCE(phone,''), COALESCE(user_role,'employee'),
+			       COALESCE(bio,''), COALESCE(domain,'')
+			FROM users
+			WHERE LOWER(domain) = LOWER($1)
+			ORDER BY name`, domain)
+	}
 	if err != nil {
-		fmt.Println("GetUsers query error:", err)
 		utils.InternalError(w, err)
 		return
 	}
 	defer rows.Close()
 
-	var users []models.User
-	for rows.Next() {
-		var u models.User
-		var lastSeen sql.NullTime
-		err := rows.Scan(
-			&u.ID, &u.Name, &u.Email,
-			&u.Role, &u.Department, &u.Status,
-			&u.AvatarURL, &u.Phone,
-			&u.UserRole,
-			&lastSeen,
-		)
-		if err != nil {
-			// ✅ Log error so we can see it in Render logs
-			fmt.Println("GetUsers scan error:", err)
-			continue
-		}
-		if lastSeen.Valid {
-			u.LastSeen = &lastSeen.Time
-		}
-		users = append(users, u)
+	type UserOut struct {
+		ID         string `json:"id"`
+		Name       string `json:"name"`
+		Email      string `json:"email"`
+		Role       string `json:"role"`
+		Department string `json:"department"`
+		Status     string `json:"status"`
+		AvatarURL  string `json:"avatar_url"`
+		Phone      string `json:"phone"`
+		UserRole   string `json:"user_role"`
+		Bio        string `json:"bio"`
+		Domain     string `json:"domain"`
 	}
 
-	// ✅ Log count so we can see in Render logs
-	fmt.Println("GetUsers found:", len(users), "users")
-
+	var users []UserOut
+	for rows.Next() {
+		var u UserOut
+		rows.Scan(&u.ID, &u.Name, &u.Email, &u.Role, &u.Department,
+			&u.Status, &u.AvatarURL, &u.Phone, &u.UserRole, &u.Bio, &u.Domain)
+		users = append(users, u)
+	}
 	if users == nil {
-		users = []models.User{}
+		users = []UserOut{}
 	}
 	utils.OK(w, users)
 }
@@ -70,52 +83,21 @@ func (c *UserController) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 		utils.BadRequest(w, "invalid body")
 		return
 	}
-
-	if req.Status == "offline" {
-		c.DB.Exec(`
-			UPDATE users
-			SET status=$1, last_seen=NOW(), updated_at=NOW()
-			WHERE id=$2`, req.Status, userID)
-	} else {
-		c.DB.Exec(`
-			UPDATE users
-			SET status=$1, updated_at=NOW()
-			WHERE id=$2`, req.Status, userID)
-	}
+	c.DB.Exec(`UPDATE users SET status=$1, updated_at=NOW() WHERE id=$2`, req.Status, userID)
 	utils.OK(w, map[string]string{"message": "status updated"})
 }
 
 func (c *UserController) DingTalkWebhook(w http.ResponseWriter, r *http.Request) {
-	var event struct {
-		SenderID       string                   `json:"senderId"`
-		Text           struct{ Content string } `json:"text"`
-		SessionWebhook string                   `json:"sessionWebhook"`
-	}
-	if err := utils.Decode(r, &event); err != nil {
-		utils.BadRequest(w, "invalid body")
-		return
-	}
-	c.DB.Exec(`
-		INSERT INTO users (name, email, password_hash, dingtalk_user_id)
-		VALUES ($1,$2,'webhook',$3) ON CONFLICT DO NOTHING`,
-		event.SenderID, event.SenderID+"@dingtalk", event.SenderID)
-	utils.OK(w, map[string]string{"message": "ok"})
+	var payload map[string]interface{}
+	json.NewDecoder(r.Body).Decode(&payload)
+	utils.OK(w, map[string]string{"message": "webhook received"})
 }
 
-func getUser(db *sql.DB, id string) *models.User {
-	var u models.User
-	var lastSeen sql.NullTime
-	err := db.QueryRow(`
-		SELECT id, name, email, role, department, status,
-		       COALESCE(user_role,'employee'), last_seen
-		FROM users WHERE id=$1`, id).
-		Scan(&u.ID, &u.Name, &u.Email, &u.Role, &u.Department,
-			&u.Status, &u.UserRole, &lastSeen)
-	if err != nil {
-		return nil
+// helper reuse from auth_controller
+func extractDomainFromEmail(email string) string {
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(email)), "@")
+	if len(parts) == 2 {
+		return parts[1]
 	}
-	if lastSeen.Valid {
-		u.LastSeen = &lastSeen.Time
-	}
-	return &u
+	return ""
 }

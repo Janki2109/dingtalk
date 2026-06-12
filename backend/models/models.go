@@ -16,9 +16,10 @@ type User struct {
 	Department     string     `json:"department"`
 	Status         string     `json:"status"`
 	UserRole       string     `json:"user_role"`
-	Bio            string     `json:"bio"` // ← ADD THIS LINE
+	Bio            string     `json:"bio"`
+	Domain         string     `json:"domain"`
 	DingTalkUserID string     `json:"dingtalk_user_id"`
-	LastSeen       *time.Time `json:"last_seen"` // ← nullable, nil = never seen
+	LastSeen       *time.Time `json:"last_seen"`
 	CreatedAt      time.Time  `json:"created_at"`
 	UpdatedAt      time.Time  `json:"updated_at"`
 }
@@ -34,6 +35,7 @@ type RegisterRequest struct {
 	Password   string `json:"password"`
 	Role       string `json:"role"`
 	Department string `json:"department"`
+	UserRole   string `json:"user_role"` // "admin" or "employee"
 }
 
 type AuthResponse struct {
@@ -65,23 +67,21 @@ type CreateChatRequest struct {
 
 // ── Message ───────────────────────────────────────────────────────────────────
 type Message struct {
-	ID              string `json:"id"`
-	ChatID          string `json:"chat_id"`
-	SenderID        string `json:"sender_id"`
-	SenderName      string `json:"sender_name"`
-	SenderAvatarURL string `json:"sender_avatar_url"`
-	Content         string `json:"content"`
-	MessageType     string `json:"message_type"`
-	FileURL         string `json:"file_url"`
-	FileName        string `json:"file_name"`
-	ReplyToID       string `json:"reply_to_id"`
-
-	IsRead      bool       `json:"is_read"`
-	Delivered   bool       `json:"delivered"`
-	DeliveredAt *time.Time `json:"delivered_at,omitempty"`
-	SeenAt      *time.Time `json:"seen_at,omitempty"`
-
-	CreatedAt time.Time `json:"created_at"`
+	ID              string     `json:"id"`
+	ChatID          string     `json:"chat_id"`
+	SenderID        string     `json:"sender_id"`
+	SenderName      string     `json:"sender_name"`
+	SenderAvatarURL string     `json:"sender_avatar_url"`
+	Content         string     `json:"content"`
+	MessageType     string     `json:"message_type"`
+	FileURL         string     `json:"file_url"`
+	FileName        string     `json:"file_name"`
+	ReplyToID       string     `json:"reply_to_id"`
+	IsRead          bool       `json:"is_read"`
+	Delivered       bool       `json:"delivered"`
+	DeliveredAt     *time.Time `json:"delivered_at,omitempty"`
+	SeenAt          *time.Time `json:"seen_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
 }
 
 type SendMessageRequest struct {

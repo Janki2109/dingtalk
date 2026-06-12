@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"log"
 	"net/http"
+	"strings"
 
 	"dingtalk/middleware"
 	"dingtalk/models"
@@ -16,6 +17,15 @@ type AuthController struct{ DB *sql.DB }
 
 func NewAuthController(db *sql.DB) *AuthController {
 	return &AuthController{DB: db}
+}
+
+// extractDomain gets the domain from an email address e.g. "jay@accenture.com" -> "accenture.com"
+func extractDomain(email string) string {
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(email)), "@")
+	if len(parts) == 2 {
+		return parts[1]
+	}
+	return ""
 }
 
 func (c *AuthController) Register(w http.ResponseWriter, r *http.Request) {
@@ -32,50 +42,88 @@ func (c *AuthController) Register(w http.ResponseWriter, r *http.Request) {
 		utils.BadRequest(w, "password must be at least 6 characters")
 		return
 	}
+
+	// Extract domain from email
+	domain := extractDomain(req.Email)
+	if domain == "" {
+		utils.BadRequest(w, "invalid email address")
+		return
+	}
+
+	// Check if email already registered
 	var existing int
 	c.DB.QueryRow(`SELECT COUNT(*) FROM users WHERE email=$1`, req.Email).Scan(&existing)
 	if existing > 0 {
 		utils.Error(w, http.StatusConflict, "email already registered")
 		return
 	}
+
+	// Determine user role
+	// req.UserRole can be "admin" or "employee" sent from Flutter
+	wantAdmin := strings.ToLower(req.UserRole) == "admin"
+
+	userRole := "employee"
+	if wantAdmin {
+		// Check if domain already has an admin
+		var adminCount int
+		c.DB.QueryRow(`SELECT COUNT(*) FROM users WHERE domain=$1 AND LOWER(user_role)='admin'`, domain).Scan(&adminCount)
+		if adminCount > 0 {
+			// Domain already has admin — force employee
+			userRole = "employee"
+			log.Printf("⚠️ Domain %s already has admin — registering %s as employee", domain, req.Email)
+		} else {
+			userRole = "admin"
+		}
+	}
+
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
 		utils.InternalError(w, err)
 		return
 	}
+
 	if req.Role == "" {
 		req.Role = "Employee"
 	}
 	if req.Department == "" {
 		req.Department = "General"
 	}
-	userRole := "employee"
-	if req.Role == "Administrator" {
-		userRole = "admin"
+	if userRole == "admin" {
+		req.Role = "Administrator"
 	}
 
-	log.Printf("📝 Registering: %s | role: %s | user_role: %s", req.Email, req.Role, userRole)
+	log.Printf("📝 Registering: %s | domain: %s | user_role: %s", req.Email, domain, userRole)
+
+	// Ensure domain column exists (safe to run every time)
+	c.DB.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS domain TEXT DEFAULT ''`)
 
 	var user models.User
 	err = c.DB.QueryRow(`
-		INSERT INTO users (name, email, password_hash, role, department, status, user_role)
-		VALUES ($1,$2,$3,$4,$5,'online',$6)
+		INSERT INTO users (name, email, password_hash, role, department, status, user_role, domain)
+		VALUES ($1,$2,$3,$4,$5,'online',$6,$7)
 		RETURNING id, name, email, role, department, status,
-		          COALESCE(user_role,'employee'), created_at`,
-		req.Name, req.Email, string(hash), req.Role, req.Department, userRole,
+		          COALESCE(user_role,'employee'), COALESCE(domain,''), created_at`,
+		req.Name, req.Email, string(hash), req.Role, req.Department, userRole, domain,
 	).Scan(&user.ID, &user.Name, &user.Email, &user.Role, &user.Department,
-		&user.Status, &user.UserRole, &user.CreatedAt)
+		&user.Status, &user.UserRole, &user.Domain, &user.CreatedAt)
 	if err != nil {
 		log.Println("❌ Insert error:", err)
 		utils.InternalError(w, err)
 		return
 	}
+
 	token, err := middleware.GenerateToken(user.ID, user.Email)
 	if err != nil {
 		utils.InternalError(w, err)
 		return
 	}
-	log.Printf("✅ Registered: %s | user_role: %s", user.Email, user.UserRole)
+
+	// If they wanted admin but got employee, tell them
+	if wantAdmin && userRole == "employee" {
+		user.Bio = "Note: This domain already has an admin. You have been registered as an employee."
+	}
+
+	log.Printf("✅ Registered: %s | domain: %s | user_role: %s", user.Email, user.Domain, user.UserRole)
 	utils.Created(w, models.AuthResponse{Token: token, User: user})
 }
 
@@ -96,11 +144,11 @@ func (c *AuthController) Login(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(role,''), COALESCE(department,''),
 		       COALESCE(status,'online'), COALESCE(avatar_url,''),
 		       COALESCE(phone,''), COALESCE(user_role,'employee'),
-		       COALESCE(bio,'')
+		       COALESCE(bio,''), COALESCE(domain,'')
 		FROM users WHERE email=$1`, req.Email,
 	).Scan(&user.ID, &user.Name, &user.Email, &hash,
 		&user.Role, &user.Department, &user.Status,
-		&user.AvatarURL, &user.Phone, &user.UserRole, &user.Bio)
+		&user.AvatarURL, &user.Phone, &user.UserRole, &user.Bio, &user.Domain)
 	if err == sql.ErrNoRows {
 		utils.Error(w, http.StatusUnauthorized, "invalid email or password")
 		return
@@ -113,6 +161,14 @@ func (c *AuthController) Login(w http.ResponseWriter, r *http.Request) {
 		utils.Error(w, http.StatusUnauthorized, "invalid email or password")
 		return
 	}
+
+	// Update domain if missing (for existing users)
+	if user.Domain == "" {
+		domain := extractDomain(req.Email)
+		c.DB.Exec(`UPDATE users SET domain=$1 WHERE id=$2`, domain, user.ID)
+		user.Domain = domain
+	}
+
 	c.DB.Exec(`UPDATE users SET status='online', updated_at=NOW() WHERE id=$1`, user.ID)
 	user.Status = "online"
 	token, err := middleware.GenerateToken(user.ID, user.Email)
@@ -120,7 +176,7 @@ func (c *AuthController) Login(w http.ResponseWriter, r *http.Request) {
 		utils.InternalError(w, err)
 		return
 	}
-	log.Printf("✅ Login: %s | user_role: %s", user.Email, user.UserRole)
+	log.Printf("✅ Login: %s | domain: %s | user_role: %s", user.Email, user.Domain, user.UserRole)
 	utils.OK(w, models.AuthResponse{Token: token, User: user})
 }
 
@@ -132,11 +188,11 @@ func (c *AuthController) Me(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(role,''), COALESCE(department,''),
 		       COALESCE(status,'online'), COALESCE(avatar_url,''),
 		       COALESCE(phone,''), COALESCE(user_role,'employee'),
-		       COALESCE(bio,'')
+		       COALESCE(bio,''), COALESCE(domain,'')
 		FROM users WHERE id=$1`, userID,
 	).Scan(&user.ID, &user.Name, &user.Email,
 		&user.Role, &user.Department, &user.Status,
-		&user.AvatarURL, &user.Phone, &user.UserRole, &user.Bio)
+		&user.AvatarURL, &user.Phone, &user.UserRole, &user.Bio, &user.Domain)
 	if err != nil {
 		utils.NotFound(w, "user not found")
 		return
@@ -187,7 +243,6 @@ func (c *AuthController) ChangePassword(w http.ResponseWriter, r *http.Request) 
 	utils.OK(w, map[string]string{"message": "password changed successfully"})
 }
 
-// ── Update Profile (name, bio, avatar_url) ────────────────────────────────────
 func (c *AuthController) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	userID := r.Header.Get("X-User-ID")
 	var req struct {
@@ -221,10 +276,10 @@ func (c *AuthController) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		       COALESCE(role,''), COALESCE(department,''),
 		       COALESCE(status,'online'), COALESCE(avatar_url,''),
 		       COALESCE(phone,''), COALESCE(user_role,'employee'),
-		       COALESCE(bio,'')
+		       COALESCE(bio,''), COALESCE(domain,'')
 		FROM users WHERE id=$1`, userID,
 	).Scan(&user.ID, &user.Name, &user.Email,
 		&user.Role, &user.Department, &user.Status,
-		&user.AvatarURL, &user.Phone, &user.UserRole, &user.Bio)
+		&user.AvatarURL, &user.Phone, &user.UserRole, &user.Bio, &user.Domain)
 	utils.OK(w, user)
 }

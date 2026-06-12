@@ -59,13 +59,15 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
-  Future<bool> register(String name, String email, String password, String role,
-      String dept) async {
+  Future<bool> register(
+      String name, String email, String password, String role, String dept,
+      {String userRole = 'employee'}) async {
     _loading = true;
     _error = null;
     notifyListeners();
     try {
-      final data = await ApiService.register(name, email, password, role, dept);
+      final data = await ApiService.register(name, email, password, role, dept,
+          userRole: userRole);
       _token = data['token'];
       await ApiService.saveToken(data['token']);
       _user = UserModel.fromJson(data['user']);
