@@ -24,7 +24,6 @@ func Setup(db *sql.DB) http.Handler {
 	file := controllers.NewFileController(db)
 	upload := controllers.NewUploadController()
 
-	// helper: inline auth wrapper
 	withAuth := func(h http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			authHeader := r.Header.Get("Authorization")
@@ -79,7 +78,8 @@ func Setup(db *sql.DB) http.Handler {
 	// ── Meetings ──────────────────────────────────────────────────────────────
 	mux.HandleFunc("GET /api/meetings", withAuth(meet.GetMeetings))
 	mux.HandleFunc("POST /api/meetings", withAuth(meet.CreateMeeting))
-	mux.HandleFunc("GET /api/meetings/code/{code}", withAuth(meet.GetMeetingByCode))
+	// NOTE: use /api/meetingcode/ prefix to avoid conflict with /{id}/participants
+	mux.HandleFunc("GET /api/meetingcode/{code}", withAuth(meet.GetMeetingByCode))
 	mux.HandleFunc("DELETE /api/meetings/{id}", withAuth(meet.DeleteMeeting))
 	mux.HandleFunc("PATCH /api/meetings/{id}/status", withAuth(meet.UpdateStatus))
 	mux.HandleFunc("POST /api/meetings/{id}/invite", withAuth(meet.InviteParticipants))
@@ -114,7 +114,7 @@ func Setup(db *sql.DB) http.Handler {
 	// ── Upload ────────────────────────────────────────────────────────────────
 	mux.HandleFunc("POST /api/upload", withAuth(upload.Upload))
 
-	// ── Static files ──────────────────────────────────────────────────────────
+	// ── Static ────────────────────────────────────────────────────────────────
 	mux.Handle("/uploads/", http.StripPrefix("/uploads/", http.FileServer(http.Dir("uploads"))))
 
 	return middleware.Logger(middleware.CORS(mux))
