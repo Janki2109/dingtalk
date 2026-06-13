@@ -279,7 +279,7 @@ func (c *ChatController) AIChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	geminiURL := "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent" + apiKey
+	geminiURL := "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
 	prompt := "You are a smart, friendly AI assistant built into a workplace app. Respond conversationally and helpfully — like ChatGPT or Gemini would. Be clear and concise. Use bullet points or numbered lists when it makes the answer easier to read. Help with anything the user asks: emails, coding, questions, brainstorming, summaries, planning, and more. Do not mention that you are Gemini or any specific AI model — just call yourself 'AI Assistant'.\n\nUser: " + req.Message
 
 	payload := map[string]interface{}{
