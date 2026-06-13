@@ -276,7 +276,7 @@ func (c *ChatController) AIChat(w http.ResponseWriter, r *http.Request) {
 	apiKey := config.App.GeminiAPIKey
 
 	payload := map[string]interface{}{
-		"model": "google/gemini-2.0-flash-exp:free",
+		"model": "llama3-8b-8192",
 		"messages": []map[string]interface{}{
 			{
 				"role":    "system",
@@ -290,11 +290,9 @@ func (c *ChatController) AIChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	bodyBytes, _ := json.Marshal(payload)
-	req2, _ := http.NewRequest("POST", "https://openrouter.ai/api/v1/chat/completions", bytes.NewBuffer(bodyBytes))
+	req2, _ := http.NewRequest("POST", "https://api.groq.com/openai/v1/chat/completions", bytes.NewBuffer(bodyBytes))
 	req2.Header.Set("Content-Type", "application/json")
 	req2.Header.Set("Authorization", "Bearer "+apiKey)
-	req2.Header.Set("HTTP-Referer", "https://dingtalk-1b41.onrender.com")
-	req2.Header.Set("X-Title", "WorkSpace Pro")
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	httpResp, err := client.Do(req2)
