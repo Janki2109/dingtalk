@@ -6,7 +6,7 @@ import '../../../data/models/app_models.dart';
 import '../../../data/services/api_service.dart';
 import '../../../data/services/auth_provider.dart';
 import '../../../shared/widgets/app_widgets.dart';
-import '../../meeting/screens/agora_meeting_screen.dart';
+import '../../meeting/screens/meeting_screen.dart';
 
 class AdminMeetingsScreen extends StatefulWidget {
   const AdminMeetingsScreen({super.key});
@@ -52,26 +52,15 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
     ));
   }
 
-  int _generateUid(String userId) {
-    int hash = 0;
-    for (var c in userId.codeUnits) {
-      hash = (hash * 31 + c) & 0x7FFFFFFF;
-    }
-    return hash == 0 ? 1 : hash;
-  }
-
   void _openRoom(MeetingModel m, {required bool isHost}) {
-    final user = context.read<AuthProvider>().user;
-    final uid = _generateUid(user?.id ?? 'admin');
     Navigator.push(
         context,
         MaterialPageRoute(
-            builder: (_) => AgoraMeetingScreen(
-                  channelName: m.code,
+            builder: (_) => WebRTCMeetingScreen(
+                  meetingCode: m.code,
                   meetingTitle: m.title,
                   meetingId: m.id,
                   isHost: isHost,
-                  uid: uid,
                 )));
   }
 
@@ -517,17 +506,15 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
                             final meeting =
                                 await ApiService.getMeetingByCode(code);
                             if (context.mounted) Navigator.pop(context);
-                            final uid = _generateUid(user?.id ?? 'admin');
                             Navigator.push(
                                 context,
                                 MaterialPageRoute(
-                                    builder: (_) => AgoraMeetingScreen(
-                                          channelName: meeting.code,
+                                    builder: (_) => WebRTCMeetingScreen(
+                                          meetingCode: meeting.code,
                                           meetingTitle: meeting.title,
                                           meetingId: meeting.id,
                                           isHost:
                                               meeting.organizerId == user?.id,
-                                          uid: uid,
                                         )));
                           } catch (e) {
                             setS(() => error = 'Meeting not found');

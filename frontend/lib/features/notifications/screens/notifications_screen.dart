@@ -5,7 +5,7 @@ import '../../../data/models/app_models.dart';
 import '../../../data/services/api_service.dart';
 import '../../../data/services/auth_provider.dart';
 import '../../../shared/widgets/app_widgets.dart';
-import '../../meeting/screens/agora_meeting_screen.dart';
+import '../../meeting/screens/meeting_screen.dart';
 
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key});
@@ -173,12 +173,11 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           Navigator.push(
               context,
               MaterialPageRoute(
-                  builder: (_) => AgoraMeetingScreen(
-                        channelName: meeting.code,
+                  builder: (_) => WebRTCMeetingScreen(
+                        meetingCode: meeting.code,
                         meetingTitle: meeting.title,
                         meetingId: meeting.id,
                         isHost: meeting.organizerId == user?.id,
-                        uid: uid == 0 ? 1 : uid,
                       )));
         },
       ),

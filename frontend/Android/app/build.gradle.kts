@@ -24,6 +24,18 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("debug")
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+    }
+
+    packaging {
+        jniLibs {
+            pickFirsts += setOf(
+                "lib/arm64-v8a/libjingle_peerconnection_so.so",
+                "lib/armeabi-v7a/libjingle_peerconnection_so.so",
+                "lib/x86/libjingle_peerconnection_so.so",
+                "lib/x86_64/libjingle_peerconnection_so.so"
+            )
         }
     }
 }

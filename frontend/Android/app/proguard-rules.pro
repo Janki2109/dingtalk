@@ -1,0 +1,5 @@
+-keep class io.agora.** { *; }
+-dontwarn io.agora.**
+-keep class com.google.devtools.build.android.desugar.runtime.ThrowableExtension { *; }
+-dontwarn com.google.devtools.build.android.desugar.runtime.ThrowableExtension
+-dontwarn java.lang.instrument.ClassFileTransformer

@@ -49,13 +49,11 @@ class MeetingChatMsg {
   final String userId;
   final String userName;
   final String content;
-  final String time;
   final bool isOwn;
   MeetingChatMsg(
       {required this.userId,
       required this.userName,
       required this.content,
-      required this.time,
       this.isOwn = false});
 }
 
@@ -74,14 +72,12 @@ class MeetingService extends ChangeNotifier {
   final List<WaitingUser> waitingRoom = [];
   final List<MeetingChatMsg> chatMessages = [];
 
-  // WebRTC
   RTCVideoRenderer localRenderer = RTCVideoRenderer();
   final Map<String, RTCPeerConnection> _peerConnections = {};
   MediaStream? _localStream;
   MediaStream? _screenStream;
   bool _localRendererInit = false;
 
-  // WebSocket
   WebSocketChannel? _channel;
   StreamSubscription? _sub;
   bool _disposed = false;
@@ -91,7 +87,6 @@ class MeetingService extends ChangeNotifier {
   VoidCallback? onRemoved;
   VoidCallback? onMeetingEnded;
 
-  String? get myUserId => _myUserId;
   bool get isHost => _isHost;
 
   static const _iceServers = {
@@ -101,6 +96,16 @@ class MeetingService extends ChangeNotifier {
           'stun:stun.l.google.com:19302',
           'stun:stun1.l.google.com:19302'
         ]
+      },
+      {
+        'urls': ['turn:openrelay.metered.ca:80'],
+        'username': 'openrelayproject',
+        'credential': 'openrelayproject',
+      },
+      {
+        'urls': ['turn:openrelay.metered.ca:443'],
+        'username': 'openrelayproject',
+        'credential': 'openrelayproject',
       },
     ]
   };
@@ -119,11 +124,9 @@ class MeetingService extends ChangeNotifier {
     status = MeetingStatus.connecting;
     _notify();
 
-    // Init local renderer
     await localRenderer.initialize();
     _localRendererInit = true;
 
-    // Get camera + mic
     try {
       _localStream = await navigator.mediaDevices.getUserMedia({
         'audio': true,
@@ -136,6 +139,11 @@ class MeetingService extends ChangeNotifier {
         _localStream = await navigator.mediaDevices
             .getUserMedia({'audio': true, 'video': false});
       } catch (_) {}
+    }
+
+    if (isHost) {
+      status = MeetingStatus.inMeeting;
+      _notify();
     }
 
     final wsBase = AppConstants.serverUrl
@@ -155,15 +163,8 @@ class MeetingService extends ChangeNotifier {
       _channel = WebSocketChannel.connect(uri);
       _sub = _channel!.stream.listen(_onMessage,
           onDone: _onDisconnect, onError: (_) => _onDisconnect());
-      // Host goes directly to meeting
-      if (isHost) {
-        status = MeetingStatus.inMeeting;
-        _notify();
-      }
     } catch (e) {
       debugPrint('WS error: $e');
-      status = MeetingStatus.ended;
-      _notify();
     }
   }
 
@@ -175,8 +176,10 @@ class MeetingService extends ChangeNotifier {
 
       switch (type) {
         case 'waiting_room':
-          status = MeetingStatus.waiting;
-          _notify();
+          if (!_isHost) {
+            status = MeetingStatus.waiting;
+            _notify();
+          }
           break;
 
         case 'admitted':
@@ -206,10 +209,10 @@ class MeetingService extends ChangeNotifier {
 
         case 'participants_update':
           final list = (msg['payload'] as List?) ?? [];
-          final existingIds = participants.map((p) => p.userId).toSet();
           for (final p in list) {
             final mp = MeetingParticipant.fromMap(Map<String, dynamic>.from(p));
-            if (mp.userId != _myUserId && !existingIds.contains(mp.userId)) {
+            if (mp.userId != _myUserId &&
+                !participants.any((e) => e.userId == mp.userId)) {
               participants.add(mp);
             }
           }
@@ -286,7 +289,6 @@ class MeetingService extends ChangeNotifier {
               userId: payload['user_id'] ?? '',
               userName: payload['user_name'] ?? '',
               content: payload['content'] ?? '',
-              time: msg['time'] ?? '',
               isOwn: payload['user_id'] == _myUserId,
             ));
             _notify();
@@ -313,12 +315,6 @@ class MeetingService extends ChangeNotifier {
         case 'muted':
           micEnabled = false;
           _localStream?.getAudioTracks().forEach((t) => t.enabled = false);
-          _notify();
-          break;
-
-        case 'video_disabled':
-          cameraEnabled = false;
-          _localStream?.getVideoTracks().forEach((t) => t.enabled = false);
           _notify();
           break;
 
@@ -350,33 +346,29 @@ class MeetingService extends ChangeNotifier {
     }
   }
 
-  // ── WebRTC ────────────────────────────────────────────────────────────────
-
   Future<RTCPeerConnection> _getOrCreatePC(String peerId) async {
     if (_peerConnections.containsKey(peerId)) return _peerConnections[peerId]!;
 
     final pc = await createPeerConnection(_iceServers);
     _peerConnections[peerId] = pc;
 
-    // Add local tracks
     _localStream
         ?.getTracks()
         .forEach((track) => pc.addTrack(track, _localStream!));
 
-    // On remote track — attach to participant renderer
     pc.onTrack = (event) async {
       if (event.streams.isNotEmpty) {
         final stream = event.streams.first;
-        final participant = participants.firstWhere((p) => p.userId == peerId,
-            orElse: () => MeetingParticipant(
-                userId: peerId, userName: peerId, isHost: false));
-        if (participant.renderer == null) {
-          final renderer = RTCVideoRenderer();
-          await renderer.initialize();
-          participant.renderer = renderer;
+        final idx = participants.indexWhere((p) => p.userId == peerId);
+        if (idx >= 0) {
+          if (participants[idx].renderer == null) {
+            final renderer = RTCVideoRenderer();
+            await renderer.initialize();
+            participants[idx].renderer = renderer;
+          }
+          participants[idx].renderer!.srcObject = stream;
+          _notify();
         }
-        participant.renderer!.srcObject = stream;
-        _notify();
       }
     };
 
@@ -389,7 +381,7 @@ class MeetingService extends ChangeNotifier {
             'candidate': cand.candidate,
             'sdpMid': cand.sdpMid,
             'sdpMLineIndex': cand.sdpMLineIndex,
-          }
+          },
         });
       }
     };
@@ -446,13 +438,11 @@ class MeetingService extends ChangeNotifier {
   void _closePeer(String peerId) {
     _peerConnections[peerId]?.close();
     _peerConnections.remove(peerId);
-    final p = participants.firstWhere((p) => p.userId == peerId,
-        orElse: () =>
-            MeetingParticipant(userId: '', userName: '', isHost: false));
-    p.renderer?.dispose();
+    final idx = participants.indexWhere((p) => p.userId == peerId);
+    if (idx >= 0) {
+      participants[idx].renderer?.dispose();
+    }
   }
-
-  // ── Controls ──────────────────────────────────────────────────────────────
 
   void toggleMic() {
     micEnabled = !micEnabled;
@@ -530,7 +520,6 @@ class MeetingService extends ChangeNotifier {
       userId: _myUserId ?? '',
       userName: _myUserName ?? 'You',
       content: content.trim(),
-      time: DateTime.now().toIso8601String(),
       isOwn: true,
     ));
     _notify();

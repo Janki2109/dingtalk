@@ -279,7 +279,7 @@ func (c *ChatController) AIChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	geminiURL := "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + apiKey
+	geminiURL := "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent" + apiKey
 	prompt := "You are a smart, friendly AI assistant built into a workplace app. Respond conversationally and helpfully — like ChatGPT or Gemini would. Be clear and concise. Use bullet points or numbered lists when it makes the answer easier to read. Help with anything the user asks: emails, coding, questions, brainstorming, summaries, planning, and more. Do not mention that you are Gemini or any specific AI model — just call yourself 'AI Assistant'.\n\nUser: " + req.Message
 
 	payload := map[string]interface{}{
@@ -289,7 +289,11 @@ func (c *ChatController) AIChat(w http.ResponseWriter, r *http.Request) {
 		"generationConfig": map[string]interface{}{"temperature": 0.9, "maxOutputTokens": 2048},
 	}
 	bodyBytes, _ := json.Marshal(payload)
-	httpResp, err := http.Post(geminiURL, "application/json", bytes.NewBuffer(bodyBytes))
+	req2, _ := http.NewRequest("POST", geminiURL, bytes.NewBuffer(bodyBytes))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("x-goog-api-key", apiKey)
+	client := &http.Client{Timeout: 30 * time.Second}
+	httpResp, err := client.Do(req2)
 	if err != nil {
 		utils.Error(w, http.StatusInternalServerError, "Gemini unreachable: "+err.Error())
 		return
