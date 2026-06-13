@@ -73,6 +73,7 @@ func Setup(db *sql.DB) http.Handler {
 	mux.HandleFunc("POST /api/chats/{id}/messages", withAuth(chat.SendMessage))
 	mux.HandleFunc("PATCH /api/chats/{id}/read", withAuth(chat.MarkChatRead))
 	mux.HandleFunc("DELETE /api/chats/{id}", withAuth(chat.DeleteChat))
+	mux.HandleFunc("DELETE /api/chats/{id}/messages/{msgId}", withAuth(chat.DeleteMessage))
 	mux.HandleFunc("POST /api/chat/ai", withAuth(chat.AIChat))
 
 	// ── Meetings ──────────────────────────────────────────────────────────────

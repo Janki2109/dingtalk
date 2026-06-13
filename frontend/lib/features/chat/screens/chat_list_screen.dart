@@ -34,10 +34,8 @@ class _ChatListScreenState extends State<ChatListScreen> {
   Future<void> _load() async {
     setState(() => _loading = true);
     try {
-      final results = await Future.wait([
-        ApiService.getChats(),
-        ApiService.getUsers(),
-      ]);
+      final results =
+          await Future.wait([ApiService.getChats(), ApiService.getUsers()]);
       final chats = results[0] as List<ChatModel>;
       final users = results[1] as List<UserModel>;
       if (mounted)
@@ -74,16 +72,15 @@ class _ChatListScreenState extends State<ChatListScreen> {
         final idx = _chats.indexWhere((c) => c.id == chat.id);
         if (idx != -1) {
           _chats[idx] = ChatModel(
-            id: chat.id,
-            name: chat.name,
-            lastMessage: chat.lastMessage,
-            lastTime: chat.lastTime,
-            avatarUrl: chat.avatarUrl,
-            isGroup: chat.isGroup,
-            isPinned: chat.isPinned,
-            isMuted: chat.isMuted,
-            unreadCount: 0,
-          );
+              id: chat.id,
+              name: chat.name,
+              lastMessage: chat.lastMessage,
+              lastTime: chat.lastTime,
+              avatarUrl: chat.avatarUrl,
+              isGroup: chat.isGroup,
+              isPinned: chat.isPinned,
+              isMuted: chat.isMuted,
+              unreadCount: 0);
         }
       });
       try {
@@ -94,11 +91,9 @@ class _ChatListScreenState extends State<ChatListScreen> {
     await Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => ChatDetailScreen(
-            chat: chat,
-            currentUserId: context.read<AuthProvider>().user?.id ?? '',
-          ),
-        ));
+            builder: (_) => ChatDetailScreen(
+                chat: chat,
+                currentUserId: context.read<AuthProvider>().user?.id ?? '')));
     _load();
   }
 
@@ -110,22 +105,22 @@ class _ChatListScreenState extends State<ChatListScreen> {
                   borderRadius: BorderRadius.circular(16)),
               title: const Text('Delete Chat',
                   style: TextStyle(fontWeight: FontWeight.w700)),
-              content: const Text('Remove this chat from your list?'),
+              content: const Text('Permanently delete this chat for you?'),
               actions: [
                 TextButton(
                     onPressed: () => Navigator.pop(context),
                     child: const Text('Cancel')),
                 ElevatedButton(
-                  onPressed: () {
+                  onPressed: () async {
                     Navigator.pop(context);
                     setState(() => _chats.removeWhere((c) => c.id == id));
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                      content: const Text('Chat removed'),
-                      backgroundColor: AppColors.busy,
-                      behavior: SnackBarBehavior.floating,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
-                    ));
+                    try {
+                      await ApiService.deleteChat(id);
+                      _snack('Chat deleted', AppColors.busy);
+                    } catch (e) {
+                      _snack('Failed to delete', AppColors.busy);
+                      _load();
+                    }
                   },
                   style:
                       ElevatedButton.styleFrom(backgroundColor: AppColors.busy),
@@ -133,6 +128,61 @@ class _ChatListScreenState extends State<ChatListScreen> {
                 ),
               ],
             ));
+  }
+
+  void _muteChat(ChatModel chat) async {
+    _snack(
+        chat.isMuted ? 'Chat unmuted' : 'Chat muted', AppColors.textSecondary);
+    // Update locally
+    final idx = _chats.indexWhere((c) => c.id == chat.id);
+    if (idx != -1) {
+      setState(() {
+        _chats[idx] = ChatModel(
+          id: chat.id,
+          name: chat.name,
+          lastMessage: chat.lastMessage,
+          lastTime: chat.lastTime,
+          avatarUrl: chat.avatarUrl,
+          isGroup: chat.isGroup,
+          isPinned: chat.isPinned,
+          isMuted: !chat.isMuted,
+          unreadCount: chat.unreadCount,
+        );
+      });
+    }
+  }
+
+  void _markAsRead(String id) async {
+    try {
+      await ApiService.markChatRead(id);
+      final idx = _chats.indexWhere((c) => c.id == id);
+      if (idx != -1 && mounted) {
+        setState(() {
+          final c = _chats[idx];
+          _chats[idx] = ChatModel(
+              id: c.id,
+              name: c.name,
+              lastMessage: c.lastMessage,
+              lastTime: c.lastTime,
+              avatarUrl: c.avatarUrl,
+              isGroup: c.isGroup,
+              isPinned: c.isPinned,
+              isMuted: c.isMuted,
+              unreadCount: 0);
+        });
+      }
+      _snack('Marked as read', AppColors.online);
+    } catch (_) {}
+  }
+
+  void _snack(String msg, Color color) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg, style: const TextStyle(fontWeight: FontWeight.w600)),
+      backgroundColor: color,
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+    ));
   }
 
   void _showNewChatOptions() {
@@ -263,7 +313,6 @@ class _ChatListScreenState extends State<ChatListScreen> {
   Widget build(BuildContext context) {
     final user = context.watch<AuthProvider>().user;
     final themeColor = context.watch<AuthProvider>().themeColor;
-
     return Scaffold(
       backgroundColor: AppColors.bg,
       body: CustomScrollView(slivers: [
@@ -274,7 +323,7 @@ class _ChatListScreenState extends State<ChatListScreen> {
           title: const Text('Messages',
               style: TextStyle(fontWeight: FontWeight.w800, fontSize: 22)),
           actions: [
-            IconButton(icon: const Icon(Icons.refresh), onPressed: _load),
+            IconButton(icon: const Icon(Icons.refresh), onPressed: _load)
           ],
           bottom: PreferredSize(
             preferredSize: const Size.fromHeight(60),
@@ -288,26 +337,26 @@ class _ChatListScreenState extends State<ChatListScreen> {
               child: Center(child: CircularProgressIndicator()))
         else if (_filtered.isEmpty)
           SliverFillRemaining(
-            child:
-                Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Icon(Icons.chat_bubble_outline,
-                  size: 72, color: AppColors.textMuted.withOpacity(0.3)),
-              const SizedBox(height: 16),
-              const Text('No conversations yet',
-                  style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.textSecondary)),
-              const SizedBox(height: 8),
-              const Text('Tap + to start chatting',
-                  style: TextStyle(fontSize: 14, color: AppColors.textMuted)),
-              const SizedBox(height: 24),
-              ElevatedButton.icon(
-                  onPressed: _showNewChatOptions,
-                  icon: const Icon(Icons.add),
-                  label: const Text('Start New Chat')),
-            ]),
-          )
+              child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                Icon(Icons.chat_bubble_outline,
+                    size: 72, color: AppColors.textMuted.withOpacity(0.3)),
+                const SizedBox(height: 16),
+                const Text('No conversations yet',
+                    style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textSecondary)),
+                const SizedBox(height: 8),
+                const Text('Tap + to start chatting',
+                    style: TextStyle(fontSize: 14, color: AppColors.textMuted)),
+                const SizedBox(height: 24),
+                ElevatedButton.icon(
+                    onPressed: _showNewChatOptions,
+                    icon: const Icon(Icons.add),
+                    label: const Text('Start New Chat')),
+              ]))
         else ...[
           if (_pinned.isNotEmpty) ...[
             const SliverToBoxAdapter(child: SectionHeader(title: '📌 Pinned')),
@@ -319,10 +368,8 @@ class _ChatListScreenState extends State<ChatListScreen> {
                 userMap: _userMap,
                 onTap: () => _openChat(_pinned[i]),
                 onDelete: () => _deleteChat(_pinned[i].id),
-                onMarkRead: () async {
-                  await ApiService.markChatRead(_pinned[i].id);
-                  _load();
-                },
+                onMarkRead: () => _markAsRead(_pinned[i].id),
+                onMute: () => _muteChat(_pinned[i]),
                 themeColor: themeColor,
               ),
               childCount: _pinned.length,
@@ -337,10 +384,8 @@ class _ChatListScreenState extends State<ChatListScreen> {
               userMap: _userMap,
               onTap: () => _openChat(_regular[i]),
               onDelete: () => _deleteChat(_regular[i].id),
-              onMarkRead: () async {
-                await ApiService.markChatRead(_regular[i].id);
-                _load();
-              },
+              onMarkRead: () => _markAsRead(_regular[i].id),
+              onMute: () => _muteChat(_regular[i]),
               themeColor: themeColor,
             ),
             childCount: _regular.length,
@@ -361,18 +406,18 @@ class _ChatTile extends StatelessWidget {
   final ChatModel chat;
   final String currentUserId;
   final Map<String, UserModel> userMap;
-  final VoidCallback onTap, onDelete, onMarkRead;
+  final VoidCallback onTap, onDelete, onMarkRead, onMute;
   final Color themeColor;
 
-  const _ChatTile({
-    required this.chat,
-    required this.currentUserId,
-    required this.userMap,
-    required this.onTap,
-    required this.onDelete,
-    required this.onMarkRead,
-    required this.themeColor,
-  });
+  const _ChatTile(
+      {required this.chat,
+      required this.currentUserId,
+      required this.userMap,
+      required this.onTap,
+      required this.onDelete,
+      required this.onMarkRead,
+      required this.onMute,
+      required this.themeColor});
 
   String get _displayName => chat.name;
 
@@ -488,7 +533,6 @@ class _ChatTile extends StatelessWidget {
                               : AppColors.textMuted)),
                 ]),
                 const SizedBox(height: 3),
-                // ✅ FIXED: Show last message for ALL chats like WhatsApp
                 Row(children: [
                   Expanded(
                       child: Text(
@@ -508,7 +552,7 @@ class _ChatTile extends StatelessWidget {
                         size: 13, color: AppColors.textMuted),
                   if (chat.unreadCount > 0) ...[
                     const SizedBox(width: 6),
-                    UnreadBadge(count: chat.unreadCount),
+                    UnreadBadge(count: chat.unreadCount)
                   ],
                 ]),
               ])),
@@ -559,15 +603,16 @@ class _ChatTile extends StatelessWidget {
                 onMarkRead();
               }),
           _Option(
-              icon: Icons.push_pin_outlined,
-              label: 'Pin Chat',
-              color: AppColors.primary,
-              onTap: () => Navigator.pop(context)),
-          _Option(
-              icon: Icons.volume_off_outlined,
-              label: 'Mute Notifications',
-              color: AppColors.textSecondary,
-              onTap: () => Navigator.pop(context)),
+            icon: chat.isMuted
+                ? Icons.volume_up_outlined
+                : Icons.volume_off_outlined,
+            label: chat.isMuted ? 'Unmute' : 'Mute Notifications',
+            color: AppColors.textSecondary,
+            onTap: () {
+              Navigator.pop(context);
+              onMute();
+            },
+          ),
           const Divider(height: 1),
           _Option(
               icon: Icons.delete_outline,
@@ -664,20 +709,18 @@ class _NewChatSheetState extends State<_NewChatSheet> {
     try {
       final chatId = await ApiService.createDirectChat(user.id);
       widget.onChatCreated(ChatModel(
-        id: chatId,
-        name: user.name,
-        lastMessage: 'Tap to start chatting',
-        lastTime: DateTime.now(),
-        unreadCount: 0,
-      ));
+          id: chatId,
+          name: user.name,
+          lastMessage: 'Tap to start chatting',
+          lastTime: DateTime.now(),
+          unreadCount: 0));
     } catch (_) {
       widget.onChatCreated(ChatModel(
-        id: 'local_${user.id}',
-        name: user.name,
-        lastMessage: 'Tap to start chatting',
-        lastTime: DateTime.now(),
-        unreadCount: 0,
-      ));
+          id: 'local_${user.id}',
+          name: user.name,
+          lastMessage: 'Tap to start chatting',
+          lastTime: DateTime.now(),
+          unreadCount: 0));
     }
   }
 
@@ -732,28 +775,27 @@ class _NewChatSheetState extends State<_NewChatSheet> {
                 color: AppColors.border,
                 borderRadius: BorderRadius.circular(2))),
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-          child: Row(children: [
-            Container(
-                width: 36,
-                height: 36,
-                decoration: BoxDecoration(
-                    gradient: widget.isGroup
-                        ? AppColors.purpleGrad
-                        : AppColors.primaryGrad,
-                    shape: BoxShape.circle),
-                child: Icon(widget.isGroup ? Icons.group : Icons.person,
-                    color: Colors.white, size: 18)),
-            const SizedBox(width: 12),
-            Text(widget.isGroup ? 'New Group Chat' : 'New Message',
-                style:
-                    const TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
-            const Spacer(),
-            IconButton(
-                icon: const Icon(Icons.close),
-                onPressed: () => Navigator.pop(context)),
-          ]),
-        ),
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+            child: Row(children: [
+              Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                      gradient: widget.isGroup
+                          ? AppColors.purpleGrad
+                          : AppColors.primaryGrad,
+                      shape: BoxShape.circle),
+                  child: Icon(widget.isGroup ? Icons.group : Icons.person,
+                      color: Colors.white, size: 18)),
+              const SizedBox(width: 12),
+              Text(widget.isGroup ? 'New Group Chat' : 'New Message',
+                  style: const TextStyle(
+                      fontSize: 20, fontWeight: FontWeight.w700)),
+              const Spacer(),
+              IconButton(
+                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(context)),
+            ])),
         if (widget.isGroup)
           Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -771,40 +813,39 @@ class _NewChatSheetState extends State<_NewChatSheet> {
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 children: _selectedNames
                     .map((name) => Padding(
-                          padding: const EdgeInsets.only(right: 12),
-                          child: Column(children: [
-                            Stack(children: [
-                              UserAvatar(name: name, size: 38),
-                              Positioned(
-                                  top: -2,
-                                  right: -2,
-                                  child: GestureDetector(
-                                    onTap: () {
-                                      final u = _users.firstWhere(
-                                          (u) => u.name == name,
-                                          orElse: () => const UserModel(
-                                              id: '', name: '', email: ''));
-                                      setState(() {
-                                        _selectedIds.remove(u.id);
-                                        _selectedNames.remove(name);
-                                      });
-                                    },
-                                    child: Container(
-                                        width: 16,
-                                        height: 16,
-                                        decoration: const BoxDecoration(
-                                            color: AppColors.busy,
-                                            shape: BoxShape.circle),
-                                        child: const Icon(Icons.close,
-                                            color: Colors.white, size: 10)),
-                                  )),
-                            ]),
-                            Text(name.split(' ').first,
-                                style: const TextStyle(
-                                    fontSize: 10,
-                                    color: AppColors.textSecondary)),
+                        padding: const EdgeInsets.only(right: 12),
+                        child: Column(children: [
+                          Stack(children: [
+                            UserAvatar(name: name, size: 38),
+                            Positioned(
+                                top: -2,
+                                right: -2,
+                                child: GestureDetector(
+                                  onTap: () {
+                                    final u = _users.firstWhere(
+                                        (u) => u.name == name,
+                                        orElse: () => const UserModel(
+                                            id: '', name: '', email: ''));
+                                    setState(() {
+                                      _selectedIds.remove(u.id);
+                                      _selectedNames.remove(name);
+                                    });
+                                  },
+                                  child: Container(
+                                      width: 16,
+                                      height: 16,
+                                      decoration: const BoxDecoration(
+                                          color: AppColors.busy,
+                                          shape: BoxShape.circle),
+                                      child: const Icon(Icons.close,
+                                          color: Colors.white, size: 10)),
+                                )),
                           ]),
-                        ))
+                          Text(name.split(' ').first,
+                              style: const TextStyle(
+                                  fontSize: 10,
+                                  color: AppColors.textSecondary)),
+                        ])))
                     .toList(),
               )),
         Padding(
@@ -813,18 +854,17 @@ class _NewChatSheetState extends State<_NewChatSheet> {
               autofocus: !widget.isGroup,
               onChanged: (v) => setState(() => _search = v),
               decoration: InputDecoration(
-                hintText: widget.isGroup
-                    ? 'Search and add people...'
-                    : 'Search by name or email...',
-                prefixIcon: const Icon(Icons.search,
-                    color: AppColors.textMuted, size: 20),
-                filled: true,
-                fillColor: AppColors.surfaceVar,
-                border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide.none),
-                contentPadding: const EdgeInsets.symmetric(vertical: 12),
-              ),
+                  hintText: widget.isGroup
+                      ? 'Search and add people...'
+                      : 'Search by name or email...',
+                  prefixIcon: const Icon(Icons.search,
+                      color: AppColors.textMuted, size: 20),
+                  filled: true,
+                  fillColor: AppColors.surfaceVar,
+                  border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide.none),
+                  contentPadding: const EdgeInsets.symmetric(vertical: 12)),
             )),
         Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
@@ -840,7 +880,7 @@ class _NewChatSheetState extends State<_NewChatSheet> {
                     style: TextStyle(
                         fontSize: 12,
                         color: themeColor,
-                        fontWeight: FontWeight.w600)),
+                        fontWeight: FontWeight.w600))
               ],
             ])),
         Expanded(
@@ -880,93 +920,56 @@ class _NewChatSheetState extends State<_NewChatSheet> {
                             title: Text(u.name,
                                 style: const TextStyle(
                                     fontWeight: FontWeight.w600, fontSize: 15)),
-                            subtitle: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(u.email,
-                                      style: const TextStyle(
-                                          fontSize: 11,
-                                          color: AppColors.textMuted)),
-                                  Row(children: [
-                                    Text('${u.role} · ${u.department}',
-                                        style: const TextStyle(
-                                            fontSize: 11,
-                                            color: AppColors.textSecondary)),
-                                    const SizedBox(width: 6),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 6, vertical: 1),
-                                      decoration: BoxDecoration(
-                                          color: u.statusColor.withOpacity(0.1),
-                                          borderRadius:
-                                              BorderRadius.circular(6)),
-                                      child: Text(
-                                        u.status == 'online'
-                                            ? 'Online'
-                                            : u.status == 'busy'
-                                                ? 'Busy'
-                                                : u.status == 'away'
-                                                    ? 'Away'
-                                                    : u.lastSeenText,
-                                        style: TextStyle(
-                                            fontSize: 10,
-                                            fontWeight: FontWeight.w600,
-                                            color: u.statusColor),
-                                      ),
-                                    ),
-                                  ]),
-                                ]),
+                            subtitle: Text(u.email,
+                                style: const TextStyle(
+                                    fontSize: 11, color: AppColors.textMuted)),
                             trailing: widget.isGroup
                                 ? GestureDetector(
                                     onTap: () => setState(() {
-                                      if (isSelected) {
-                                        _selectedIds.remove(u.id);
-                                        _selectedNames.remove(u.name);
-                                      } else {
-                                        _selectedIds.add(u.id);
-                                        _selectedNames.add(u.name);
-                                      }
-                                    }),
+                                          if (isSelected) {
+                                            _selectedIds.remove(u.id);
+                                            _selectedNames.remove(u.name);
+                                          } else {
+                                            _selectedIds.add(u.id);
+                                            _selectedNames.add(u.name);
+                                          }
+                                        }),
                                     child: AnimatedContainer(
-                                      duration:
-                                          const Duration(milliseconds: 200),
-                                      width: 28,
-                                      height: 28,
-                                      decoration: BoxDecoration(
-                                          color: isSelected
-                                              ? themeColor
-                                              : Colors.transparent,
-                                          shape: BoxShape.circle,
-                                          border: Border.all(
-                                              color: isSelected
-                                                  ? themeColor
-                                                  : AppColors.border,
-                                              width: 2)),
-                                      child: isSelected
-                                          ? const Icon(Icons.check,
-                                              color: Colors.white, size: 16)
-                                          : null,
-                                    ),
-                                  )
+                                        duration:
+                                            const Duration(milliseconds: 200),
+                                        width: 28,
+                                        height: 28,
+                                        decoration: BoxDecoration(
+                                            color: isSelected
+                                                ? themeColor
+                                                : Colors.transparent,
+                                            shape: BoxShape.circle,
+                                            border: Border.all(
+                                                color: isSelected
+                                                    ? themeColor
+                                                    : AppColors.border,
+                                                width: 2)),
+                                        child: isSelected
+                                            ? const Icon(Icons.check,
+                                                color: Colors.white, size: 16)
+                                            : null))
                                 : GestureDetector(
                                     onTap: () => _startDirectChat(u),
                                     child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 14, vertical: 7),
-                                      decoration: BoxDecoration(
-                                          color: themeColor.withOpacity(0.1),
-                                          borderRadius:
-                                              BorderRadius.circular(20),
-                                          border: Border.all(
-                                              color:
-                                                  themeColor.withOpacity(0.3))),
-                                      child: Text('Message',
-                                          style: TextStyle(
-                                              color: themeColor,
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.w600)),
-                                    ),
-                                  ),
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 14, vertical: 7),
+                                        decoration: BoxDecoration(
+                                            color: themeColor.withOpacity(0.1),
+                                            borderRadius:
+                                                BorderRadius.circular(20),
+                                            border: Border.all(
+                                                color: themeColor
+                                                    .withOpacity(0.3))),
+                                        child: Text('Message',
+                                            style: TextStyle(
+                                                color: themeColor,
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w600)))),
                             onTap: widget.isGroup
                                 ? () => setState(() {
                                       if (isSelected) {

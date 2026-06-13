@@ -357,5 +357,13 @@ func (c *ChatController) DeleteChat(w http.ResponseWriter, r *http.Request) {
 
 	utils.OK(w, map[string]string{"message": "chat deleted"})
 }
-
-func formatChatTime(t time.Time) string { return t.Format("2006-01-02 15:04:05") }
+func (c *ChatController) DeleteMessage(w http.ResponseWriter, r *http.Request) {
+	userID := r.Header.Get("X-User-ID")
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	msgID := parts[len(parts)-1]
+	c.DB.Exec(`DELETE FROM messages WHERE id=$1 AND sender_id=$2`, msgID, userID)
+	utils.OK(w, map[string]string{"message": "deleted"})
+}
+func formatChatTime(t time.Time) string {
+	return t.Format("2006-01-02 15:04:05")
+}
