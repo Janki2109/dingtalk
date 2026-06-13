@@ -276,7 +276,7 @@ func (c *ChatController) AIChat(w http.ResponseWriter, r *http.Request) {
 	apiKey := config.App.GeminiAPIKey
 
 	payload := map[string]interface{}{
-		"model": "llama3-8b-8192",
+		"model": "llama-3.3-70b-versatile",
 		"messages": []map[string]interface{}{
 			{
 				"role":    "system",
