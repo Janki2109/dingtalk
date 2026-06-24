@@ -27,7 +27,6 @@ type Config struct {
 var App *Config
 
 func Load() {
-	// Try loading .env from current directory
 	if err := godotenv.Load(); err != nil {
 		log.Println("⚠️  No .env file found, using system environment variables")
 	} else {
@@ -35,14 +34,17 @@ func Load() {
 	}
 
 	App = &Config{
-		Port:           getEnv("PORT", "8080"),
-		DBHost:         getEnv("DB_HOST", "localhost"),
-		DBPort:         getEnv("DB_PORT", "5432"),
-		DBUser:         getEnv("DB_USER", "postgres"),
-		DBPassword:     getEnv("DB_PASSWORD", "postgres"),
-		DBName:         getEnv("DB_NAME", "dingtalk"),
-		DBSSLMode:      getEnv("DB_SSLMODE", "disable"),
-		JWTSecret:      getEnv("JWT_SECRET", "changeme"),
+		Port:       getEnv("PORT", "8080"),
+		DBHost:     getEnv("DB_HOST", "localhost"),
+		DBPort:     getEnv("DB_PORT", "5432"),
+		DBUser:     getEnv("DB_USER", "postgres"),
+		DBPassword: getEnv("DB_PASSWORD", "postgres"),
+		DBName:     getEnv("DB_NAME", "dingtalk"),
+		DBSSLMode:  getEnv("DB_SSLMODE", "disable"),
+
+		// FIX BUG 28: JWT secret must be set — crash at startup if missing
+		JWTSecret: getEnvRequired("JWT_SECRET"),
+
 		JWTExpiryHours: getEnv("JWT_EXPIRY_HOURS", "72"),
 		GeminiAPIKey:   getEnv("GEMINI_API_KEY", ""),
 		DingTalkAppKey: getEnv("DINGTALK_APP_KEY", ""),
@@ -50,7 +52,6 @@ func Load() {
 		AllowedOrigins: getEnv("ALLOWED_ORIGINS", "*"),
 	}
 
-	// Log key status
 	if App.GeminiAPIKey != "" {
 		log.Println("✅ Gemini API key loaded")
 	} else {
@@ -71,4 +72,13 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// FIX BUG 28: crash at startup if a required env var is missing
+func getEnvRequired(key string) string {
+	v := os.Getenv(key)
+	if v == "" {
+		log.Fatalf("FATAL: required environment variable %q is not set. Server cannot start safely.", key)
+	}
+	return v
 }

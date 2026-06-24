@@ -6,7 +6,7 @@ import '../../../data/models/app_models.dart';
 import '../../../data/services/api_service.dart';
 import '../../../data/services/auth_provider.dart';
 import '../../../shared/widgets/app_widgets.dart';
-import '../../meeting/screens/agora_meeting_screen.dart';
+import '../../meeting/screens/meeting_screen.dart';
 
 class AdminMeetingsScreen extends StatefulWidget {
   const AdminMeetingsScreen({super.key});
@@ -26,6 +26,8 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
   }
 
   Future<void> _load() async {
+    // FIX BUG 18: mounted check before setState
+    if (!mounted) return;
     setState(() => _loading = true);
     try {
       final results =
@@ -52,26 +54,15 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
     ));
   }
 
-  int _generateUid(String userId) {
-    int hash = 0;
-    for (var c in userId.codeUnits) {
-      hash = (hash * 31 + c) & 0x7FFFFFFF;
-    }
-    return hash == 0 ? 1 : hash;
-  }
-
   void _openRoom(MeetingModel m, {required bool isHost}) {
-    final user = context.read<AuthProvider>().user;
-    final uid = _generateUid(user?.id ?? 'admin');
     Navigator.push(
         context,
         MaterialPageRoute(
-            builder: (_) => AgoraMeetingScreen(
-                  channelName: m.code,
+            builder: (_) => WebRTCMeetingScreen(
+                  meetingCode: m.code,
                   meetingTitle: m.title,
                   meetingId: m.id,
                   isHost: isHost,
-                  uid: uid,
                 )));
   }
 
@@ -337,8 +328,20 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
                                 context: context,
                                 initialTime: TimeOfDay.fromDateTime(end));
                             if (t == null) return;
-                            setS(() => end = DateTime(
-                                d.year, d.month, d.day, t.hour, t.minute));
+                            // FIX BUG 12: validate end time is after start time
+                            final newEnd = DateTime(
+                                d.year, d.month, d.day, t.hour, t.minute);
+                            if (!newEnd.isAfter(start)) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content:
+                                      Text('End time must be after start time'),
+                                  backgroundColor: Colors.red,
+                                ),
+                              );
+                              return;
+                            }
+                            setS(() => end = newEnd);
                           },
                           child: _DateTile(label: 'End', value: fmtDate(end)),
                         ),
@@ -412,7 +415,7 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
                                               start.toUtc().toIso8601String(),
                                           'end_time':
                                               end.toUtc().toIso8601String(),
-                                          'participant_ids': selectedIds
+                                          'participant_ids': selectedIds,
                                         });
                                         if (context.mounted)
                                           Navigator.pop(context);
@@ -517,17 +520,15 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
                             final meeting =
                                 await ApiService.getMeetingByCode(code);
                             if (context.mounted) Navigator.pop(context);
-                            final uid = _generateUid(user?.id ?? 'admin');
                             Navigator.push(
                                 context,
                                 MaterialPageRoute(
-                                    builder: (_) => AgoraMeetingScreen(
-                                          channelName: meeting.code,
+                                    builder: (_) => WebRTCMeetingScreen(
+                                          meetingCode: meeting.code,
                                           meetingTitle: meeting.title,
                                           meetingId: meeting.id,
                                           isHost:
                                               meeting.organizerId == user?.id,
-                                          uid: uid,
                                         )));
                           } catch (e) {
                             setS(() => error = 'Meeting not found');

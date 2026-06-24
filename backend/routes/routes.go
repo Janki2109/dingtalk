@@ -44,7 +44,7 @@ func Setup(db *sql.DB) http.Handler {
 
 	// ── Public ────────────────────────────────────────────────────────────────
 	mux.HandleFunc("POST /api/auth/register", auth.Register)
-	mux.HandleFunc("POST /api/auth/login", auth.Login)
+	mux.Handle("POST /api/auth/login", middleware.RateLimit(http.HandlerFunc(auth.Login)))
 	mux.HandleFunc("POST /api/webhook/dingtalk", user.DingTalkWebhook)
 
 	// ── WebSocket ─────────────────────────────────────────────────────────────

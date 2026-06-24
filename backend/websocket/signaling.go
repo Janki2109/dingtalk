@@ -242,7 +242,14 @@ func (h *SigHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	roomCode := r.URL.Query().Get("room")
 	meetingID := r.URL.Query().Get("meeting_id")
-	isHostParam := r.URL.Query().Get("is_host") == "true"
+
+	// FIX BUG 26: never trust is_host from client — verify from DB only
+	isHostParam := false
+	if meetingID != "" {
+		var dbOrgID string
+		h.db.QueryRow(`SELECT organizer_id FROM meetings WHERE id=$1`, meetingID).Scan(&dbOrgID)
+		isHostParam = dbOrgID == userID
+	}
 
 	if roomCode == "" {
 		http.Error(w, `{"error":"room required"}`, http.StatusBadRequest)
@@ -289,16 +296,13 @@ func (h *SigHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	room.mu.Unlock()
 
 	if client.IsAdmitted {
-		// Notify existing admitted participants
 		room.broadcastAdmitted(SigMsg{
 			Type:    "participant_joined",
 			Payload: client.toParticipant(),
 		}, userID)
-		// Give new host current state
 		client.write(SigMsg{Type: "participants_update", Payload: room.participantList()})
 		client.write(SigMsg{Type: "waiting_update", Payload: room.waitingList()})
 	} else {
-		// Waiting room — notify host
 		room.sendTo(room.HostID, SigMsg{
 			Type:    "waiting_update",
 			Payload: room.waitingList(),
@@ -309,7 +313,6 @@ func (h *SigHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}})
 	}
 
-	// Record attendance
 	if meetingID != "" {
 		h.db.Exec(`
 			INSERT INTO meeting_attendance (meeting_id, user_id, joined_at, status)
@@ -341,7 +344,6 @@ func (h *SigHub) readPump(client *SigClient, room *SigRoom) {
 
 		switch msg.Type {
 
-		// WebRTC signals — relay to target peer
 		case "offer", "answer", "ice_candidate":
 			if msg.TargetID != "" {
 				room.sendTo(msg.TargetID, msg)
@@ -372,7 +374,8 @@ func (h *SigHub) readPump(client *SigClient, room *SigRoom) {
 					"content":   msg.Content,
 				},
 			}
-			room.broadcastAdmitted(chatMsg, "")
+			// FIX BUG 09: skip sender to prevent duplicate message
+			room.broadcastAdmitted(chatMsg, client.UserID)
 			if room.MeetingID != "" {
 				h.db.Exec(`INSERT INTO meeting_chat_messages (meeting_id, sender_id, content) VALUES ($1,$2,$3)`,
 					room.MeetingID, client.UserID, msg.Content)
@@ -393,8 +396,6 @@ func (h *SigHub) readPump(client *SigClient, room *SigRoom) {
 					"video_enabled": client.VideoEnabled,
 				},
 			}, client.UserID)
-
-		// ── Admin commands ────────────────────────────────────────────────────
 
 		case "admit_user":
 			if client.UserID != room.HostID {
@@ -569,6 +570,14 @@ func (h *SigHub) handleLeave(client *SigClient, room *SigRoom) {
 			h.db.Exec(`UPDATE meetings SET status='ended' WHERE id=$1`, room.MeetingID)
 		}
 		room.broadcastAdmitted(SigMsg{Type: "meeting_ended"}, "")
+		// FIX BUG 11: close all remaining connections before deleting room
+		room.mu.Lock()
+		for _, c := range room.clients {
+			if c.UserID != client.UserID {
+				c.safeClose()
+			}
+		}
+		room.mu.Unlock()
 		h.deleteRoom(room.Code)
 	} else if remaining == 0 {
 		h.deleteRoom(room.Code)

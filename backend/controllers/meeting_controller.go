@@ -18,12 +18,13 @@ func NewMeetingController(db *sql.DB) *MeetingController {
 	return &MeetingController{DB: db}
 }
 
+// FIX BUG 01: use local rand source — no global state, no data race
 func generateCode() string {
 	const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-	rand.Seed(time.Now().UnixNano())
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	b := make([]byte, 6)
 	for i := range b {
-		b[i] = chars[rand.Intn(len(chars))]
+		b[i] = chars[r.Intn(len(chars))]
 	}
 	return string(b)
 }
@@ -114,6 +115,12 @@ func (c *MeetingController) CreateMeeting(w http.ResponseWriter, r *http.Request
 		req.Title = "Meeting"
 	}
 
+	// FIX BUG 12: validate end time is after start time
+	if !req.EndTime.IsZero() && !req.StartTime.IsZero() && !req.EndTime.After(req.StartTime) {
+		utils.BadRequest(w, "end_time must be after start_time")
+		return
+	}
+
 	code := generateCode()
 	for {
 		var exists int
@@ -175,10 +182,8 @@ func (c *MeetingController) CreateMeeting(w http.ResponseWriter, r *http.Request
 }
 
 func (c *MeetingController) GetMeetingByCode(w http.ResponseWriter, r *http.Request) {
-	// Extract code from path
 	code := r.PathValue("code")
 	if code == "" {
-		// fallback manual parse
 		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 		for i, p := range parts {
 			if p == "code" && i+1 < len(parts) {
@@ -218,6 +223,28 @@ func (c *MeetingController) GetMeetingByCode(w http.ResponseWriter, r *http.Requ
 	}
 
 	jitsiLink := fmt.Sprintf("https://meet.jit.si/WorkspacePro-%s", codeOut)
+
+	// FIX BUG 17: fetch real participants instead of hardcoding empty array
+	pRows, _ := c.DB.Query(`
+		SELECT u.id, COALESCE(u.name,''), COALESCE(u.avatar_url,''), COALESCE(u.status,'offline')
+		FROM meeting_participants mp
+		JOIN users u ON u.id = mp.user_id
+		WHERE mp.meeting_id = $1`, id)
+	var participants []map[string]interface{}
+	if pRows != nil {
+		for pRows.Next() {
+			var pID, pName, pAvatar, pStatus string
+			pRows.Scan(&pID, &pName, &pAvatar, &pStatus)
+			participants = append(participants, map[string]interface{}{
+				"id": pID, "name": pName, "avatar_url": pAvatar, "status": pStatus,
+			})
+		}
+		pRows.Close()
+	}
+	if participants == nil {
+		participants = []map[string]interface{}{}
+	}
+
 	utils.OK(w, map[string]interface{}{
 		"id": id, "title": title, "description": desc,
 		"organizer_id": orgID, "organizer": orgName,
@@ -225,7 +252,7 @@ func (c *MeetingController) GetMeetingByCode(w http.ResponseWriter, r *http.Requ
 		"meeting_link": link, "code": codeOut,
 		"invite_link": jitsiLink,
 		"status":      status, "created_at": created,
-		"participants": []interface{}{},
+		"participants": participants,
 	})
 }
 
@@ -233,11 +260,9 @@ func (c *MeetingController) GetByCode(w http.ResponseWriter, r *http.Request) {
 	c.GetMeetingByCode(w, r)
 }
 
-// DeleteMeeting permanently deletes a meeting (organizer or admin only)
 func (c *MeetingController) DeleteMeeting(w http.ResponseWriter, r *http.Request) {
 	userID := r.Header.Get("X-User-ID")
 
-	// Get meeting ID from path
 	meetID := r.PathValue("id")
 	if meetID == "" {
 		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
@@ -256,23 +281,22 @@ func (c *MeetingController) DeleteMeeting(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Check user is organizer or admin
-	var orgID string
+	// FIX BUG 30: admin can only delete meetings in their own domain
+	var orgID, userDomain, meetingDomain string
 	var isAdmin bool
 	c.DB.QueryRow(`SELECT organizer_id FROM meetings WHERE id=$1`, meetID).Scan(&orgID)
-	c.DB.QueryRow(`SELECT LOWER(user_role)='admin' FROM users WHERE id=$1`, userID).Scan(&isAdmin)
+	c.DB.QueryRow(`SELECT LOWER(user_role)='admin', COALESCE(domain,'') FROM users WHERE id=$1`, userID).Scan(&isAdmin, &userDomain)
+	c.DB.QueryRow(`SELECT COALESCE(u.domain,'') FROM meetings m JOIN users u ON u.id=m.organizer_id WHERE m.id=$1`, meetID).Scan(&meetingDomain)
 
-	if orgID != userID && !isAdmin {
-		utils.Error(w, http.StatusForbidden, "only organizer or admin can delete meetings")
+	if orgID != userID && (!isAdmin || userDomain != meetingDomain) {
+		utils.Error(w, http.StatusForbidden, "only organizer or admin of the same domain can delete meetings")
 		return
 	}
 
-	// Delete related records first
 	c.DB.Exec(`DELETE FROM meeting_participants WHERE meeting_id=$1`, meetID)
 	c.DB.Exec(`DELETE FROM meeting_attendance WHERE meeting_id=$1`, meetID)
 	c.DB.Exec(`DELETE FROM notifications WHERE action_id=$1`, meetID)
 
-	// Delete the meeting
 	result, err := c.DB.Exec(`DELETE FROM meetings WHERE id=$1`, meetID)
 	if err != nil {
 		utils.InternalError(w, err)
@@ -289,6 +313,7 @@ func (c *MeetingController) DeleteMeeting(w http.ResponseWriter, r *http.Request
 }
 
 func (c *MeetingController) UpdateStatus(w http.ResponseWriter, r *http.Request) {
+	userID := r.Header.Get("X-User-ID")
 	meetID := r.PathValue("id")
 	if meetID == "" {
 		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
@@ -299,6 +324,15 @@ func (c *MeetingController) UpdateStatus(w http.ResponseWriter, r *http.Request)
 			}
 		}
 	}
+
+	// FIX BUG 04: only organizer can update status
+	var orgID string
+	c.DB.QueryRow(`SELECT organizer_id FROM meetings WHERE id=$1`, meetID).Scan(&orgID)
+	if orgID != userID {
+		utils.Error(w, http.StatusForbidden, "only the organizer can update meeting status")
+		return
+	}
+
 	var req struct {
 		Status string `json:"status"`
 	}
@@ -306,11 +340,20 @@ func (c *MeetingController) UpdateStatus(w http.ResponseWriter, r *http.Request)
 		utils.BadRequest(w, "invalid body")
 		return
 	}
+
+	// FIX BUG 02: validate status against allowed values only
+	allowed := map[string]bool{"upcoming": true, "ongoing": true, "ended": true}
+	if !allowed[req.Status] {
+		utils.BadRequest(w, "invalid status — must be: upcoming, ongoing, or ended")
+		return
+	}
+
 	c.DB.Exec(`UPDATE meetings SET status=$1 WHERE id=$2`, req.Status, meetID)
 	utils.OK(w, map[string]string{"message": "updated"})
 }
 
 func (c *MeetingController) InviteParticipants(w http.ResponseWriter, r *http.Request) {
+	userID := r.Header.Get("X-User-ID")
 	meetID := r.PathValue("id")
 	if meetID == "" {
 		parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
@@ -326,6 +369,14 @@ func (c *MeetingController) InviteParticipants(w http.ResponseWriter, r *http.Re
 	}
 	if meetID == "" {
 		utils.BadRequest(w, "missing meeting id")
+		return
+	}
+
+	// FIX BUG 03: only organizer can invite participants
+	var orgID string
+	c.DB.QueryRow(`SELECT organizer_id FROM meetings WHERE id=$1`, meetID).Scan(&orgID)
+	if orgID != userID {
+		utils.Error(w, http.StatusForbidden, "only the organizer can invite participants")
 		return
 	}
 
@@ -375,7 +426,12 @@ func (c *MeetingController) RequestMeeting(w http.ResponseWriter, r *http.Reques
 		msg = fmt.Sprintf("%s wants you to join '%s' · Code: %s", userName, meetTitle, code)
 	}
 
-	adminRows, err := c.DB.Query(`SELECT id FROM users WHERE LOWER(user_role)='admin' AND id != $1`, userID)
+	// FIX BUG 05: only notify admins in the same domain as the requester
+	adminRows, err := c.DB.Query(`
+		SELECT id FROM users
+		WHERE LOWER(user_role)='admin'
+		  AND id != $1
+		  AND domain = (SELECT domain FROM users WHERE id=$1)`, userID)
 	if err != nil {
 		utils.InternalError(w, err)
 		return

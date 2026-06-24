@@ -49,14 +49,13 @@ class MeetingChatMsg {
   final String userId;
   final String userName;
   final String content;
-  final String time;
   final bool isOwn;
-  MeetingChatMsg(
-      {required this.userId,
-      required this.userName,
-      required this.content,
-      required this.time,
-      this.isOwn = false});
+  MeetingChatMsg({
+    required this.userId,
+    required this.userName,
+    required this.content,
+    this.isOwn = false,
+  });
 }
 
 class MeetingService extends ChangeNotifier {
@@ -69,19 +68,18 @@ class MeetingService extends ChangeNotifier {
   bool cameraEnabled = true;
   bool handRaised = false;
   bool screenSharing = false;
+  bool _togglingScreenShare = false; // FIX BUG 24: re-entrancy guard
 
   final List<MeetingParticipant> participants = [];
   final List<WaitingUser> waitingRoom = [];
   final List<MeetingChatMsg> chatMessages = [];
 
-  // WebRTC
   RTCVideoRenderer localRenderer = RTCVideoRenderer();
   final Map<String, RTCPeerConnection> _peerConnections = {};
   MediaStream? _localStream;
   MediaStream? _screenStream;
   bool _localRendererInit = false;
 
-  // WebSocket
   WebSocketChannel? _channel;
   StreamSubscription? _sub;
   bool _disposed = false;
@@ -91,7 +89,6 @@ class MeetingService extends ChangeNotifier {
   VoidCallback? onRemoved;
   VoidCallback? onMeetingEnded;
 
-  String? get myUserId => _myUserId;
   bool get isHost => _isHost;
 
   static const _iceServers = {
@@ -99,8 +96,18 @@ class MeetingService extends ChangeNotifier {
       {
         'urls': [
           'stun:stun.l.google.com:19302',
-          'stun:stun1.l.google.com:19302'
+          'stun:stun1.l.google.com:19302',
         ]
+      },
+      {
+        'urls': ['turn:openrelay.metered.ca:80'],
+        'username': 'openrelayproject',
+        'credential': 'openrelayproject',
+      },
+      {
+        'urls': ['turn:openrelay.metered.ca:443'],
+        'username': 'openrelayproject',
+        'credential': 'openrelayproject',
       },
     ]
   };
@@ -119,11 +126,9 @@ class MeetingService extends ChangeNotifier {
     status = MeetingStatus.connecting;
     _notify();
 
-    // Init local renderer
     await localRenderer.initialize();
     _localRendererInit = true;
 
-    // Get camera + mic
     try {
       _localStream = await navigator.mediaDevices.getUserMedia({
         'audio': true,
@@ -133,8 +138,10 @@ class MeetingService extends ChangeNotifier {
     } catch (e) {
       debugPrint('Media error: $e');
       try {
+        // FIX BUG 21: set srcObject even for audio-only fallback
         _localStream = await navigator.mediaDevices
             .getUserMedia({'audio': true, 'video': false});
+        localRenderer.srcObject = _localStream;
       } catch (_) {}
     }
 
@@ -142,28 +149,33 @@ class MeetingService extends ChangeNotifier {
         .replaceFirst('https://', 'wss://')
         .replaceFirst('http://', 'ws://');
 
+    // FIX BUG 27: remove token from URL — send as first WebSocket message
     final uri = Uri.parse(
       '$wsBase/ws/meeting'
       '?room=${Uri.encodeComponent(roomCode)}'
       '&meeting_id=${Uri.encodeComponent(meetingId)}'
-      '&is_host=$isHost'
-      '&name=${Uri.encodeComponent(userName)}'
-      '&token=${Uri.encodeComponent(token)}',
+      '&name=${Uri.encodeComponent(userName)}',
     );
 
     try {
       _channel = WebSocketChannel.connect(uri);
-      _sub = _channel!.stream.listen(_onMessage,
-          onDone: _onDisconnect, onError: (_) => _onDisconnect());
-      // Host goes directly to meeting
+
+      // FIX BUG 27: send token as first message instead of URL param
+      _channel!.sink.add(jsonEncode({'type': 'auth', 'token': token}));
+
+      // FIX BUG 10: set inMeeting AFTER WebSocket connects, not before
       if (isHost) {
         status = MeetingStatus.inMeeting;
         _notify();
       }
+
+      _sub = _channel!.stream.listen(
+        _onMessage,
+        onDone: _onDisconnect,
+        onError: (_) => _onDisconnect(),
+      );
     } catch (e) {
       debugPrint('WS error: $e');
-      status = MeetingStatus.ended;
-      _notify();
     }
   }
 
@@ -175,8 +187,10 @@ class MeetingService extends ChangeNotifier {
 
       switch (type) {
         case 'waiting_room':
-          status = MeetingStatus.waiting;
-          _notify();
+          if (!_isHost) {
+            status = MeetingStatus.waiting;
+            _notify();
+          }
           break;
 
         case 'admitted':
@@ -206,10 +220,15 @@ class MeetingService extends ChangeNotifier {
 
         case 'participants_update':
           final list = (msg['payload'] as List?) ?? [];
-          final existingIds = participants.map((p) => p.userId).toSet();
+          // FIX BUG 06: rebuild list from scratch to remove stale/ghost entries
+          final incomingIds =
+              list.map((p) => p['user_id'] as String? ?? '').toSet();
+          participants.removeWhere(
+              (e) => e.userId != _myUserId && !incomingIds.contains(e.userId));
           for (final p in list) {
             final mp = MeetingParticipant.fromMap(Map<String, dynamic>.from(p));
-            if (mp.userId != _myUserId && !existingIds.contains(mp.userId)) {
+            if (mp.userId != _myUserId &&
+                !participants.any((e) => e.userId == mp.userId)) {
               participants.add(mp);
             }
           }
@@ -234,7 +253,6 @@ class MeetingService extends ChangeNotifier {
               payload is Map ? (payload['user_id'] as String? ?? '') : '';
           if (uid.isNotEmpty) {
             _closePeer(uid);
-            participants.removeWhere((e) => e.userId == uid);
             _notify();
           }
           break;
@@ -282,14 +300,17 @@ class MeetingService extends ChangeNotifier {
         case 'chat_message':
           final payload = msg['payload'];
           if (payload is Map) {
-            chatMessages.add(MeetingChatMsg(
-              userId: payload['user_id'] ?? '',
-              userName: payload['user_name'] ?? '',
-              content: payload['content'] ?? '',
-              time: msg['time'] ?? '',
-              isOwn: payload['user_id'] == _myUserId,
-            ));
-            _notify();
+            final senderId = payload['user_id'] as String? ?? '';
+            // Only add if not our own message (we add it in sendChat already)
+            if (senderId != _myUserId) {
+              chatMessages.add(MeetingChatMsg(
+                userId: senderId,
+                userName: payload['user_name'] ?? '',
+                content: payload['content'] ?? '',
+                isOwn: false,
+              ));
+              _notify();
+            }
           }
           break;
 
@@ -313,12 +334,6 @@ class MeetingService extends ChangeNotifier {
         case 'muted':
           micEnabled = false;
           _localStream?.getAudioTracks().forEach((t) => t.enabled = false);
-          _notify();
-          break;
-
-        case 'video_disabled':
-          cameraEnabled = false;
-          _localStream?.getVideoTracks().forEach((t) => t.enabled = false);
           _notify();
           break;
 
@@ -350,33 +365,29 @@ class MeetingService extends ChangeNotifier {
     }
   }
 
-  // ── WebRTC ────────────────────────────────────────────────────────────────
-
   Future<RTCPeerConnection> _getOrCreatePC(String peerId) async {
     if (_peerConnections.containsKey(peerId)) return _peerConnections[peerId]!;
 
     final pc = await createPeerConnection(_iceServers);
     _peerConnections[peerId] = pc;
 
-    // Add local tracks
     _localStream
         ?.getTracks()
         .forEach((track) => pc.addTrack(track, _localStream!));
 
-    // On remote track — attach to participant renderer
     pc.onTrack = (event) async {
       if (event.streams.isNotEmpty) {
         final stream = event.streams.first;
-        final participant = participants.firstWhere((p) => p.userId == peerId,
-            orElse: () => MeetingParticipant(
-                userId: peerId, userName: peerId, isHost: false));
-        if (participant.renderer == null) {
-          final renderer = RTCVideoRenderer();
-          await renderer.initialize();
-          participant.renderer = renderer;
+        final idx = participants.indexWhere((p) => p.userId == peerId);
+        if (idx >= 0) {
+          if (participants[idx].renderer == null) {
+            final renderer = RTCVideoRenderer();
+            await renderer.initialize();
+            participants[idx].renderer = renderer;
+          }
+          participants[idx].renderer!.srcObject = stream;
+          _notify();
         }
-        participant.renderer!.srcObject = stream;
-        _notify();
       }
     };
 
@@ -389,7 +400,7 @@ class MeetingService extends ChangeNotifier {
             'candidate': cand.candidate,
             'sdpMid': cand.sdpMid,
             'sdpMLineIndex': cand.sdpMLineIndex,
-          }
+          },
         });
       }
     };
@@ -414,9 +425,21 @@ class MeetingService extends ChangeNotifier {
   }
 
   Future<void> _handleOffer(String fromId, String sdp) async {
+    // FIX BUG 07: look up real name from participants list instead of using UUID
+    String realName = fromId;
+    final existing = participants.where((p) => p.userId == fromId).firstOrNull;
+    if (existing != null &&
+        existing.userName.isNotEmpty &&
+        existing.userName != fromId) {
+      realName = existing.userName;
+    }
+
     if (!participants.any((p) => p.userId == fromId)) {
-      participants.add(
-          MeetingParticipant(userId: fromId, userName: fromId, isHost: false));
+      participants.add(MeetingParticipant(
+        userId: fromId,
+        userName: realName,
+        isHost: false,
+      ));
     }
     final pc = await _getOrCreatePC(fromId);
     await pc.setRemoteDescription(RTCSessionDescription(sdp, 'offer'));
@@ -446,13 +469,13 @@ class MeetingService extends ChangeNotifier {
   void _closePeer(String peerId) {
     _peerConnections[peerId]?.close();
     _peerConnections.remove(peerId);
-    final p = participants.firstWhere((p) => p.userId == peerId,
-        orElse: () =>
-            MeetingParticipant(userId: '', userName: '', isHost: false));
-    p.renderer?.dispose();
+    final idx = participants.indexWhere((p) => p.userId == peerId);
+    if (idx >= 0) {
+      participants[idx].renderer?.dispose();
+      // FIX BUG 08: remove from list after disposing renderer
+      participants.removeAt(idx);
+    }
   }
-
-  // ── Controls ──────────────────────────────────────────────────────────────
 
   void toggleMic() {
     micEnabled = !micEnabled;
@@ -460,7 +483,7 @@ class MeetingService extends ChangeNotifier {
     _send({
       'type': 'media_state',
       'audio_enabled': micEnabled,
-      'video_enabled': cameraEnabled
+      'video_enabled': cameraEnabled,
     });
     _notify();
   }
@@ -471,48 +494,55 @@ class MeetingService extends ChangeNotifier {
     _send({
       'type': 'media_state',
       'audio_enabled': micEnabled,
-      'video_enabled': cameraEnabled
+      'video_enabled': cameraEnabled,
     });
     _notify();
   }
 
+  // FIX BUG 24: re-entrancy guard prevents double-tap creating two streams
   Future<void> toggleScreenShare() async {
-    if (screenSharing) {
-      _screenStream?.getTracks().forEach((t) => t.stop());
-      _screenStream = null;
-      screenSharing = false;
-      final camTrack = _localStream?.getVideoTracks().firstOrNull;
-      if (camTrack != null) {
-        for (final pc in _peerConnections.values) {
-          final senders = await pc.getSenders();
-          for (final s in senders) {
-            if (s.track?.kind == 'video') await s.replaceTrack(camTrack);
-          }
-        }
-      }
-    } else {
-      try {
-        _screenStream = await navigator.mediaDevices
-            .getDisplayMedia({'video': true, 'audio': false});
-        final screenTrack = _screenStream?.getVideoTracks().firstOrNull;
-        if (screenTrack != null) {
-          screenSharing = true;
+    if (_togglingScreenShare) return;
+    _togglingScreenShare = true;
+    try {
+      if (screenSharing) {
+        _screenStream?.getTracks().forEach((t) => t.stop());
+        _screenStream = null;
+        screenSharing = false;
+        final camTrack = _localStream?.getVideoTracks().firstOrNull;
+        if (camTrack != null) {
           for (final pc in _peerConnections.values) {
             final senders = await pc.getSenders();
             for (final s in senders) {
-              if (s.track?.kind == 'video') await s.replaceTrack(screenTrack);
+              if (s.track?.kind == 'video') await s.replaceTrack(camTrack);
             }
           }
-          screenTrack.onEnded = () {
-            screenSharing = false;
-            _screenStream = null;
-            _notify();
-          };
         }
-      } catch (e) {
-        debugPrint('Screen share error: $e');
-        screenSharing = false;
+      } else {
+        try {
+          _screenStream = await navigator.mediaDevices
+              .getDisplayMedia({'video': true, 'audio': false});
+          final screenTrack = _screenStream?.getVideoTracks().firstOrNull;
+          if (screenTrack != null) {
+            screenSharing = true;
+            for (final pc in _peerConnections.values) {
+              final senders = await pc.getSenders();
+              for (final s in senders) {
+                if (s.track?.kind == 'video') await s.replaceTrack(screenTrack);
+              }
+            }
+            screenTrack.onEnded = () {
+              screenSharing = false;
+              _screenStream = null;
+              _notify();
+            };
+          }
+        } catch (e) {
+          debugPrint('Screen share error: $e');
+          screenSharing = false;
+        }
       }
+    } finally {
+      _togglingScreenShare = false;
     }
     _notify();
   }
@@ -526,11 +556,11 @@ class MeetingService extends ChangeNotifier {
   void sendChat(String content) {
     if (content.trim().isEmpty) return;
     _send({'type': 'chat', 'content': content.trim()});
+    // Add own message immediately — server will NOT echo it back (BUG 09 fix)
     chatMessages.add(MeetingChatMsg(
       userId: _myUserId ?? '',
       userName: _myUserName ?? 'You',
       content: content.trim(),
-      time: DateTime.now().toIso8601String(),
       isOwn: true,
     ));
     _notify();

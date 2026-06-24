@@ -5,7 +5,7 @@ import '../../../data/models/app_models.dart';
 import '../../../data/services/api_service.dart';
 import '../../../data/services/auth_provider.dart';
 import '../../../shared/widgets/app_widgets.dart';
-import '../../meeting/screens/agora_meeting_screen.dart';
+import '../../meeting/screens/meeting_screen.dart';
 
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key});
@@ -33,61 +33,14 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           _loading = false;
         });
     } catch (_) {
+      // FIX BUG 19: show empty list on error — never show fake demo notifications
       if (mounted)
         setState(() {
-          _notifs = _demo();
+          _notifs = [];
           _loading = false;
         });
     }
   }
-
-  List<NotificationModel> _demo() => [
-        NotificationModel(
-            id: 'n1',
-            userId: 'me',
-            title: 'Sprint Planning starting soon',
-            body: 'Alex Morgan invited you · Code: ABC123',
-            type: 'meeting',
-            createdAt: DateTime.now().subtract(const Duration(minutes: 5))),
-        NotificationModel(
-            id: 'n2',
-            userId: 'me',
-            title: 'New message from Sarah Chen',
-            body: 'The API is ready for testing',
-            type: 'message',
-            createdAt: DateTime.now().subtract(const Duration(minutes: 30))),
-        NotificationModel(
-            id: 'n3',
-            userId: 'me',
-            title: 'Task assigned to you',
-            body: 'Alex Morgan assigned "Write release notes" to you',
-            type: 'task',
-            createdAt: DateTime.now().subtract(const Duration(hours: 1))),
-        NotificationModel(
-            id: 'n4',
-            userId: 'me',
-            title: 'Leave request approved',
-            body: 'Your leave for Dec 25-26 has been approved',
-            type: 'approval',
-            isRead: true,
-            createdAt: DateTime.now().subtract(const Duration(hours: 2))),
-        NotificationModel(
-            id: 'n5',
-            userId: 'me',
-            title: 'Check-in reminder',
-            body: "Don't forget to check in today!",
-            type: 'attendance',
-            isRead: true,
-            createdAt: DateTime.now().subtract(const Duration(hours: 3))),
-        NotificationModel(
-            id: 'n6',
-            userId: 'me',
-            title: 'Company announcement',
-            body: 'Q3 results are out — we hit 127% of target!',
-            type: 'system',
-            isRead: true,
-            createdAt: DateTime.now().subtract(const Duration(days: 1))),
-      ];
 
   IconData _icon(String t) {
     switch (t) {
@@ -169,16 +122,15 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         code: code,
         onJoin: (meeting) {
           Navigator.pop(context);
-          final uid = meeting.code.hashCode.abs() & 0x7FFFFFFF;
+          // FIX BUG 22: removed dead uid hash code that was never used
           Navigator.push(
               context,
               MaterialPageRoute(
-                  builder: (_) => AgoraMeetingScreen(
-                        channelName: meeting.code,
+                  builder: (_) => WebRTCMeetingScreen(
+                        meetingCode: meeting.code,
                         meetingTitle: meeting.title,
                         meetingId: meeting.id,
                         isHost: meeting.organizerId == user?.id,
-                        uid: uid == 0 ? 1 : uid,
                       )));
         },
       ),
@@ -397,6 +349,9 @@ class _QuickJoinSheetState extends State<_QuickJoinSheet> {
     });
     try {
       final meeting = await ApiService.getMeetingByCode(widget.code);
+      // FIX BUG 25: check mounted before calling onJoin
+      // widget may be disposed if user dismissed the sheet
+      if (!mounted) return;
       widget.onJoin(meeting);
     } catch (e) {
       final msg = e.toString();

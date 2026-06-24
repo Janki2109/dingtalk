@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -23,7 +24,7 @@ func CORS(next http.Handler) http.Handler {
 	})
 }
 
-// ── Logger ─────────────────────────────────────────────────────────────────────
+// ── Logger ────────────────────────────────────────────────────────────────────
 func Logger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -76,6 +77,56 @@ func Auth(next http.Handler) http.Handler {
 		}
 		r.Header.Set("X-User-ID", claims.UserID)
 		r.Header.Set("X-User-Email", claims.Email)
+		next.ServeHTTP(w, r)
+	})
+}
+
+// ── FIX BUG 29: Rate Limiter ──────────────────────────────────────────────────
+type rateLimiter struct {
+	mu       sync.Mutex
+	attempts map[string][]time.Time
+	limit    int
+	window   time.Duration
+}
+
+var loginLimiter = &rateLimiter{
+	attempts: make(map[string][]time.Time),
+	limit:    10,          // max 10 attempts
+	window:   time.Minute, // per minute per IP
+}
+
+func (rl *rateLimiter) allow(ip string) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	now := time.Now()
+	cutoff := now.Add(-rl.window)
+	var recent []time.Time
+	for _, t := range rl.attempts[ip] {
+		if t.After(cutoff) {
+			recent = append(recent, t)
+		}
+	}
+	recent = append(recent, now)
+	rl.attempts[ip] = recent
+	return len(recent) <= rl.limit
+}
+
+func getIP(r *http.Request) string {
+	ip := r.Header.Get("X-Forwarded-For")
+	if ip != "" {
+		return strings.Split(ip, ",")[0]
+	}
+	return r.RemoteAddr
+}
+
+// RateLimit wraps a handler — use this on /auth/login route
+func RateLimit(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ip := getIP(r)
+		if !loginLimiter.allow(ip) {
+			http.Error(w, `{"error":"too many requests — please wait 1 minute"}`, http.StatusTooManyRequests)
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
 }

@@ -59,15 +59,6 @@ class ApiService {
     return jsonDecode(r.body);
   }
 
-  static Future<dynamic> _put(String path, Map<String, dynamic> body) async {
-    final r = await http
-        .put(Uri.parse('$_base$path'),
-            headers: await _headers(), body: jsonEncode(body))
-        .timeout(const Duration(seconds: 30));
-    if (r.statusCode >= 400) throw Exception(_parseError(r));
-    return jsonDecode(r.body);
-  }
-
   static Future<void> _patch(String path, Map<String, dynamic> body) async {
     final r = await http
         .patch(Uri.parse('$_base$path'),
@@ -189,9 +180,8 @@ class ApiService {
 
   static Future<MeetingModel> getMeetingByCode(String code) async {
     final token = await getToken();
-    print('TOKEN: $token'); // add this
     if (token == null) throw Exception('Not logged in');
-    final d = await _get('/meetings/code/${code.toUpperCase().trim()}');
+    final d = await _get('/meetingcode/${code.toUpperCase().trim()}');
     return MeetingModel.fromJson(d as Map<String, dynamic>);
   }
 
@@ -210,11 +200,9 @@ class ApiService {
     }
   }
 
+  // FIX BUG 13: use correct DELETE path matching backend route
   static Future<void> removeParticipant(String meetingId, String userId) async {
-    try {
-      await _post(
-          '/meetings/$meetingId/remove-participant', {'user_id': userId});
-    } catch (_) {}
+    await _delete('/meetings/$meetingId/participants/$userId');
   }
 
   static Future<void> inviteToMeeting(
@@ -238,8 +226,10 @@ class ApiService {
     return list.map((j) => TaskModel.fromJson(j)).toList();
   }
 
-  static Future<void> createTask(Map<String, dynamic> body) =>
+  // FIX BUG 15: return created task so caller gets server-assigned ID and defaults
+  static Future<Map<String, dynamic>> createTask(Map<String, dynamic> body) =>
       _post('/tasks', body);
+
   static Future<void> updateTaskStatus(String id, String status) =>
       _patch('/tasks/$id/status', {'status': status});
 
@@ -254,7 +244,11 @@ class ApiService {
     return AttendanceModel.fromJson(d);
   }
 
-  static Future<void> checkOut() => _post('/attendance/checkout', {});
+  // FIX BUG 16: return attendance record so UI gets server-side checkout timestamp
+  static Future<AttendanceModel> checkOut() async {
+    final d = await _post('/attendance/checkout', {});
+    return AttendanceModel.fromJson(d);
+  }
 
   // ── Notifications ─────────────────────────────────────────────────────────
   static Future<List<NotificationModel>> getNotifications() async {
@@ -283,16 +277,9 @@ class ApiService {
     }
   }
 
+  // FIX BUG 14: removed useless PUT fallback — only PATCH route exists
   static Future<void> updateApprovalStatus(String id, String status) async {
-    try {
-      await _patch('/approvals/$id/status', {'status': status});
-    } catch (_) {
-      try {
-        await _put('/approvals/$id/status', {'status': status});
-      } catch (e) {
-        throw Exception('Failed to update approval: $e');
-      }
-    }
+    await _patch('/approvals/$id/status', {'status': status});
   }
 
   // ── Files ─────────────────────────────────────────────────────────────────
