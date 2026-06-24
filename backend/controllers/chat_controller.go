@@ -274,24 +274,30 @@ func (c *ChatController) AIChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	apiKey := config.App.GeminiAPIKey
-	if apiKey == "" {
-		utils.Error(w, http.StatusInternalServerError, "Gemini API key not configured")
-		return
-	}
-
-	geminiURL := "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + apiKey
-	prompt := "You are a smart, friendly AI assistant built into a workplace app. Respond conversationally and helpfully — like ChatGPT or Gemini would. Be clear and concise. Use bullet points or numbered lists when it makes the answer easier to read. Help with anything the user asks: emails, coding, questions, brainstorming, summaries, planning, and more. Do not mention that you are Gemini or any specific AI model — just call yourself 'AI Assistant'.\n\nUser: " + req.Message
 
 	payload := map[string]interface{}{
-		"contents": []map[string]interface{}{
-			{"parts": []map[string]interface{}{{"text": prompt}}},
+		"model": "llama-3.3-70b-versatile",
+		"messages": []map[string]interface{}{
+			{
+				"role":    "system",
+				"content": "You are a smart, friendly AI assistant built into a workplace app. Be clear and concise. Help with anything the user asks.",
+			},
+			{
+				"role":    "user",
+				"content": req.Message,
+			},
 		},
-		"generationConfig": map[string]interface{}{"temperature": 0.9, "maxOutputTokens": 2048},
 	}
+
 	bodyBytes, _ := json.Marshal(payload)
-	httpResp, err := http.Post(geminiURL, "application/json", bytes.NewBuffer(bodyBytes))
+	req2, _ := http.NewRequest("POST", "https://api.groq.com/openai/v1/chat/completions", bytes.NewBuffer(bodyBytes))
+	req2.Header.Set("Content-Type", "application/json")
+	req2.Header.Set("Authorization", "Bearer "+apiKey)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	httpResp, err := client.Do(req2)
 	if err != nil {
-		utils.Error(w, http.StatusInternalServerError, "Gemini unreachable: "+err.Error())
+		utils.Error(w, http.StatusInternalServerError, "AI unreachable: "+err.Error())
 		return
 	}
 	defer httpResp.Body.Close()
@@ -301,28 +307,24 @@ func (c *ChatController) AIChat(w http.ResponseWriter, r *http.Request) {
 
 	if errObj, ok := result["error"]; ok {
 		if errMap, ok := errObj.(map[string]interface{}); ok {
-			utils.Error(w, http.StatusBadGateway, fmt.Sprintf("Gemini: %v", errMap["message"]))
+			utils.Error(w, http.StatusBadGateway, fmt.Sprintf("AI error: %v", errMap["message"]))
 			return
 		}
 	}
 
 	reply := "I couldn't process that. Please try again."
-	if candidates, ok := result["candidates"].([]interface{}); ok && len(candidates) > 0 {
-		if c0, ok := candidates[0].(map[string]interface{}); ok {
-			if content, ok := c0["content"].(map[string]interface{}); ok {
-				if pts, ok := content["parts"].([]interface{}); ok && len(pts) > 0 {
-					if pt, ok := pts[0].(map[string]interface{}); ok {
-						if txt, ok := pt["text"].(string); ok && txt != "" {
-							reply = txt
-						}
-					}
+	if choices, ok := result["choices"].([]interface{}); ok && len(choices) > 0 {
+		if c0, ok := choices[0].(map[string]interface{}); ok {
+			if msg, ok := c0["message"].(map[string]interface{}); ok {
+				if txt, ok := msg["content"].(string); ok && txt != "" {
+					reply = txt
 				}
 			}
 		}
 	}
+
 	utils.OK(w, models.AIChatResponse{Reply: reply})
 }
-
 func (c *ChatController) DeleteChat(w http.ResponseWriter, r *http.Request) {
 	userID := r.Header.Get("X-User-ID")
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
@@ -355,5 +357,13 @@ func (c *ChatController) DeleteChat(w http.ResponseWriter, r *http.Request) {
 
 	utils.OK(w, map[string]string{"message": "chat deleted"})
 }
-
-func formatChatTime(t time.Time) string { return t.Format("2006-01-02 15:04:05") }
+func (c *ChatController) DeleteMessage(w http.ResponseWriter, r *http.Request) {
+	userID := r.Header.Get("X-User-ID")
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	msgID := parts[len(parts)-1]
+	c.DB.Exec(`DELETE FROM messages WHERE id=$1 AND sender_id=$2`, msgID, userID)
+	utils.OK(w, map[string]string{"message": "deleted"})
+}
+func formatChatTime(t time.Time) string {
+	return t.Format("2006-01-02 15:04:05")
+}

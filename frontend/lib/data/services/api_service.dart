@@ -34,9 +34,8 @@ class ApiService {
   static String _parseError(http.Response r) {
     try {
       final body = jsonDecode(r.body);
-      if (body is Map) {
+      if (body is Map)
         return body['error'] ?? body['message'] ?? 'Error ${r.statusCode}';
-      }
     } catch (_) {}
     return 'Error ${r.statusCode}';
   }
@@ -68,9 +67,8 @@ class ApiService {
   }
 
   static Future<void> _delete(String path) async {
-    final headers = await _headers();
     final r = await http
-        .delete(Uri.parse('$_base$path'), headers: headers)
+        .delete(Uri.parse('$_base$path'), headers: await _headers())
         .timeout(const Duration(seconds: 30));
     if (r.statusCode >= 400) throw Exception(_parseError(r));
   }
@@ -88,7 +86,7 @@ class ApiService {
         'password': password,
         'role': role,
         'department': dept,
-        'user_role': userRole,
+        'user_role': userRole
       });
 
   static Future<UserModel> getMe() async {
@@ -161,6 +159,8 @@ class ApiService {
   static Future<void> markChatRead(String chatId) =>
       _patch('/chats/$chatId/read', {});
   static Future<void> deleteChat(String chatId) => _delete('/chats/$chatId');
+  static Future<void> deleteMessage(String chatId, String messageId) =>
+      _delete('/chats/$chatId/messages/$messageId');
 
   static Future<String> aiChat(String userId, String message) async {
     final d = await _post('/chat/ai', {'user_id': userId, 'message': message});
@@ -187,7 +187,6 @@ class ApiService {
 
   static Future<void> updateMeetingStatus(String id, String status) =>
       _patch('/meetings/$id/status', {'status': status});
-
   static Future<void> deleteMeeting(String id) => _delete('/meetings/$id');
 
   static Future<List<Map<String, dynamic>>> getMeetingParticipants(
@@ -258,7 +257,6 @@ class ApiService {
 
   static Future<void> markNotificationRead(String id) =>
       _patch('/notifications/$id/read', {});
-
   static Future<void> markAllNotificationsRead() =>
       _post('/notifications/read-all', {});
 
@@ -295,7 +293,7 @@ class ApiService {
       'name': name,
       'file_type': fileType,
       'size': size,
-      if (url.isNotEmpty) 'url': url,
+      if (url.isNotEmpty) 'url': url
     });
   }
 
