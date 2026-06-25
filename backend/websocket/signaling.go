@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -222,34 +221,8 @@ var sigUpgrader = websocket.Upgrader{
 // ── HTTP Handler ──────────────────────────────────────────────────────────────
 
 func (h *SigHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// JWT auth via query param (browsers cannot set WS headers)
-	token := r.URL.Query().Get("token")
-	if token == "" {
-		auth := r.Header.Get("Authorization")
-		token = strings.TrimPrefix(auth, "Bearer ")
-	}
-	claims, err := middleware.ValidateToken(token)
-	if err != nil || claims == nil {
-		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
-		return
-	}
-
-	userID := claims.UserID
-	userName := r.URL.Query().Get("name")
-	if userName == "" {
-		h.db.QueryRow(`SELECT COALESCE(name,'') FROM users WHERE id=$1`, userID).Scan(&userName)
-	}
-
 	roomCode := r.URL.Query().Get("room")
 	meetingID := r.URL.Query().Get("meeting_id")
-
-	// FIX BUG 26: never trust is_host from client — verify from DB only
-	isHostParam := false
-	if meetingID != "" {
-		var dbOrgID string
-		h.db.QueryRow(`SELECT organizer_id FROM meetings WHERE id=$1`, meetingID).Scan(&dbOrgID)
-		isHostParam = dbOrgID == userID
-	}
 
 	if roomCode == "" {
 		http.Error(w, `{"error":"room required"}`, http.StatusBadRequest)
@@ -260,6 +233,46 @@ func (h *SigHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Println("WS upgrade error:", err)
 		return
+	}
+
+	// FIX BUG #62: authenticate via first WS message — frontend sends
+	// {"type":"auth","token":"<jwt>"} as the very first message after connecting
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_, raw, err := conn.ReadMessage()
+	conn.SetReadDeadline(time.Time{})
+	if err != nil {
+		conn.WriteMessage(websocket.TextMessage, []byte(`{"error":"auth timeout"}`))
+		conn.Close()
+		return
+	}
+	var authMsg struct {
+		Type  string `json:"type"`
+		Token string `json:"token"`
+	}
+	if json.Unmarshal(raw, &authMsg) != nil || authMsg.Type != "auth" || authMsg.Token == "" {
+		conn.WriteMessage(websocket.TextMessage, []byte(`{"error":"expected auth message"}`))
+		conn.Close()
+		return
+	}
+	claims, err := middleware.ValidateToken(authMsg.Token)
+	if err != nil || claims == nil {
+		conn.WriteMessage(websocket.TextMessage, []byte(`{"error":"unauthorized"}`))
+		conn.Close()
+		return
+	}
+
+	userID := claims.UserID
+	userName := r.URL.Query().Get("name")
+	if userName == "" {
+		h.db.QueryRow(`SELECT COALESCE(name,'') FROM users WHERE id=$1`, userID).Scan(&userName)
+	}
+
+	// FIX BUG 26: never trust is_host from client — verify from DB only
+	isHostParam := false
+	if meetingID != "" {
+		var dbOrgID string
+		h.db.QueryRow(`SELECT organizer_id FROM meetings WHERE id=$1`, meetingID).Scan(&dbOrgID)
+		isHostParam = dbOrgID == userID
 	}
 
 	room := h.getOrCreate(roomCode, meetingID)

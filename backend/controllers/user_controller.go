@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
-	"strings"
 
 	"dingtalk/utils"
 )
@@ -15,7 +14,6 @@ func NewUserController(db *sql.DB) *UserController {
 	return &UserController{DB: db}
 }
 
-// GetUsers returns only users from the same domain as the requester
 func (c *UserController) GetUsers(w http.ResponseWriter, r *http.Request) {
 	userEmail := r.Header.Get("X-User-Email")
 	domain := extractDomain(userEmail)
@@ -24,7 +22,6 @@ func (c *UserController) GetUsers(w http.ResponseWriter, r *http.Request) {
 	var err error
 
 	if domain == "" {
-		// fallback — return all (shouldn't happen)
 		rows, err = c.DB.Query(`
 			SELECT id, name, email, COALESCE(role,''), COALESCE(department,''),
 			       COALESCE(status,'offline'), COALESCE(avatar_url,''),
@@ -64,8 +61,13 @@ func (c *UserController) GetUsers(w http.ResponseWriter, r *http.Request) {
 	var users []UserOut
 	for rows.Next() {
 		var u UserOut
-		rows.Scan(&u.ID, &u.Name, &u.Email, &u.Role, &u.Department,
-			&u.Status, &u.AvatarURL, &u.Phone, &u.UserRole, &u.Bio, &u.Domain)
+		// FIX BUG #20: check Scan error
+		if err := rows.Scan(
+			&u.ID, &u.Name, &u.Email, &u.Role, &u.Department,
+			&u.Status, &u.AvatarURL, &u.Phone, &u.UserRole, &u.Bio, &u.Domain,
+		); err != nil {
+			continue
+		}
 		users = append(users, u)
 	}
 	if users == nil {
@@ -89,15 +91,13 @@ func (c *UserController) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 
 func (c *UserController) DingTalkWebhook(w http.ResponseWriter, r *http.Request) {
 	var payload map[string]interface{}
-	json.NewDecoder(r.Body).Decode(&payload)
+	// FIX BUG #21: check json.Decode error
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		utils.BadRequest(w, "invalid webhook payload")
+		return
+	}
 	utils.OK(w, map[string]string{"message": "webhook received"})
 }
 
-// helper reuse from auth_controller
-func extractDomainFromEmail(email string) string {
-	parts := strings.Split(strings.ToLower(strings.TrimSpace(email)), "@")
-	if len(parts) == 2 {
-		return parts[1]
-	}
-	return ""
-}
+// FIX BUG #22: removed dead duplicate extractDomainFromEmail function
+// extractDomain already exists in auth_controller.go and is used directly

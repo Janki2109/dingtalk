@@ -20,7 +20,8 @@ func NewChatController(db *sql.DB) *ChatController { return &ChatController{DB: 
 
 func (c *ChatController) GetChats(w http.ResponseWriter, r *http.Request) {
 	userID := r.Header.Get("X-User-ID")
-	fmt.Println("DEBUG GetChats userID:", userID)
+	// FIX BUG #14: removed debug fmt.Println that leaked user IDs to logs
+
 	rows, err := c.DB.Query(`
 		SELECT
 			c.id,
@@ -138,12 +139,12 @@ func (c *ChatController) GetMessages(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 	}
+	// FIX BUG #16: return error if chatID is empty instead of running bad query
 	if chatID == "" {
 		utils.BadRequest(w, "missing chat id")
 		return
 	}
 
-	// Mark messages as read
 	c.DB.Exec(`
 		UPDATE messages SET is_read=true
 		WHERE chat_id=$1 AND sender_id!=$2 AND is_read=false`,
@@ -186,6 +187,8 @@ func (c *ChatController) GetMessages(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			continue
 		}
+		// FIX BUG #15: assign senderAvatar to the correct field
+		msg.SenderAvatarURL = senderAvatar
 		messages = append(messages, msg)
 	}
 	if messages == nil {
@@ -219,8 +222,6 @@ func (c *ChatController) SendMessage(w http.ResponseWriter, r *http.Request) {
 		msgType = "text"
 	}
 
-	// ✅ FIX: save file_url and file_name
-	// ✅ REPLACE WITH:
 	fileURL := req.FileURL
 	fileName := req.FileName
 
@@ -238,7 +239,6 @@ func (c *ChatController) SendMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get sender's real name
 	c.DB.QueryRow(`SELECT name FROM users WHERE id=$1`, userID).Scan(&msg.SenderName)
 	c.DB.Exec(`UPDATE chats SET updated_at=NOW() WHERE id=$1`, chatID)
 
@@ -254,6 +254,11 @@ func (c *ChatController) MarkChatRead(w http.ResponseWriter, r *http.Request) {
 			chatID = parts[i+1]
 			break
 		}
+	}
+	// FIX BUG #16: guard against empty chatID
+	if chatID == "" {
+		utils.BadRequest(w, "missing chat id")
+		return
 	}
 	c.DB.Exec(`
 		UPDATE messages SET is_read=true
@@ -302,8 +307,12 @@ func (c *ChatController) AIChat(w http.ResponseWriter, r *http.Request) {
 	}
 	defer httpResp.Body.Close()
 
+	// FIX BUG #17: check json.Decode error for Groq AI response
 	var result map[string]interface{}
-	json.NewDecoder(httpResp.Body).Decode(&result)
+	if err := json.NewDecoder(httpResp.Body).Decode(&result); err != nil {
+		utils.Error(w, http.StatusBadGateway, "failed to parse AI response")
+		return
+	}
 
 	if errObj, ok := result["error"]; ok {
 		if errMap, ok := errObj.(map[string]interface{}); ok {
@@ -325,6 +334,7 @@ func (c *ChatController) AIChat(w http.ResponseWriter, r *http.Request) {
 
 	utils.OK(w, models.AIChatResponse{Reply: reply})
 }
+
 func (c *ChatController) DeleteChat(w http.ResponseWriter, r *http.Request) {
 	userID := r.Header.Get("X-User-ID")
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
@@ -340,11 +350,20 @@ func (c *ChatController) DeleteChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// FIX BUG #18: check Scan error for userRole
 	var userRole string
-	c.DB.QueryRow(`SELECT COALESCE(user_role,'employee') FROM users WHERE id=$1`, userID).Scan(&userRole)
+	if err := c.DB.QueryRow(
+		`SELECT COALESCE(user_role,'employee') FROM users WHERE id=$1`, userID,
+	).Scan(&userRole); err != nil {
+		utils.InternalError(w, err)
+		return
+	}
 
 	var memberCount int
-	c.DB.QueryRow(`SELECT COUNT(*) FROM chat_members WHERE chat_id=$1 AND user_id=$2`, chatID, userID).Scan(&memberCount)
+	c.DB.QueryRow(
+		`SELECT COUNT(*) FROM chat_members WHERE chat_id=$1 AND user_id=$2`,
+		chatID, userID,
+	).Scan(&memberCount)
 
 	if memberCount == 0 && userRole != "admin" {
 		utils.Error(w, http.StatusForbidden, "not authorized to delete this chat")
@@ -357,13 +376,23 @@ func (c *ChatController) DeleteChat(w http.ResponseWriter, r *http.Request) {
 
 	utils.OK(w, map[string]string{"message": "chat deleted"})
 }
+
 func (c *ChatController) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 	userID := r.Header.Get("X-User-ID")
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+
+	// FIX BUG #19: guard against empty or malformed URL causing panic
+	if len(parts) == 0 {
+		utils.BadRequest(w, "missing message id")
+		return
+	}
 	msgID := parts[len(parts)-1]
+	if msgID == "" || msgID == "messages" {
+		utils.BadRequest(w, "missing message id")
+		return
+	}
+
 	c.DB.Exec(`DELETE FROM messages WHERE id=$1 AND sender_id=$2`, msgID, userID)
 	utils.OK(w, map[string]string{"message": "deleted"})
 }
-func formatChatTime(t time.Time) string {
-	return t.Format("2006-01-02 15:04:05")
-}
+

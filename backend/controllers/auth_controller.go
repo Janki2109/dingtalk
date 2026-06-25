@@ -19,7 +19,6 @@ func NewAuthController(db *sql.DB) *AuthController {
 	return &AuthController{DB: db}
 }
 
-// extractDomain gets the domain from an email address e.g. "jay@accenture.com" -> "accenture.com"
 func extractDomain(email string) string {
 	parts := strings.Split(strings.ToLower(strings.TrimSpace(email)), "@")
 	if len(parts) == 2 {
@@ -43,32 +42,37 @@ func (c *AuthController) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Extract domain from email
 	domain := extractDomain(req.Email)
 	if domain == "" {
 		utils.BadRequest(w, "invalid email address")
 		return
 	}
 
-	// Check if email already registered
+	// FIX BUG #10: check Scan error in duplicate-email check
 	var existing int
-	c.DB.QueryRow(`SELECT COUNT(*) FROM users WHERE email=$1`, req.Email).Scan(&existing)
+	if err := c.DB.QueryRow(`SELECT COUNT(*) FROM users WHERE email=$1`, req.Email).Scan(&existing); err != nil {
+		utils.InternalError(w, err)
+		return
+	}
 	if existing > 0 {
 		utils.Error(w, http.StatusConflict, "email already registered")
 		return
 	}
 
-	// Determine user role
-	// req.UserRole can be "admin" or "employee" sent from Flutter
 	wantAdmin := strings.ToLower(req.UserRole) == "admin"
-
 	userRole := "employee"
+
 	if wantAdmin {
-		// Check if domain already has an admin
+		// FIX BUG #11: check Scan error for adminCount
+		// DB failure must NOT silently make everyone admin
 		var adminCount int
-		c.DB.QueryRow(`SELECT COUNT(*) FROM users WHERE domain=$1 AND LOWER(user_role)='admin'`, domain).Scan(&adminCount)
-		if adminCount > 0 {
-			// Domain already has admin — force employee
+		if err := c.DB.QueryRow(
+			`SELECT COUNT(*) FROM users WHERE domain=$1 AND LOWER(user_role)='admin'`, domain,
+		).Scan(&adminCount); err != nil {
+			// On DB error, safely default to employee — never grant admin
+			log.Printf("⚠️ Admin count query failed for domain %s: %v — defaulting to employee", domain, err)
+			userRole = "employee"
+		} else if adminCount > 0 {
 			userRole = "employee"
 			log.Printf("⚠️ Domain %s already has admin — registering %s as employee", domain, req.Email)
 		} else {
@@ -94,8 +98,8 @@ func (c *AuthController) Register(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("📝 Registering: %s | domain: %s | user_role: %s", req.Email, domain, userRole)
 
-	// Ensure domain column exists (safe to run every time)
-	c.DB.Exec(`ALTER TABLE users ADD COLUMN IF NOT EXISTS domain TEXT DEFAULT ''`)
+	// FIX BUG #12: removed ALTER TABLE DDL from HTTP handler
+	// DDL now only runs in migrate() at startup — not on every registration
 
 	var user models.User
 	err = c.DB.QueryRow(`
@@ -118,7 +122,6 @@ func (c *AuthController) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If they wanted admin but got employee, tell them
 	if wantAdmin && userRole == "employee" {
 		user.Bio = "Note: This domain already has an admin. You have been registered as an employee."
 	}
@@ -162,7 +165,6 @@ func (c *AuthController) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update domain if missing (for existing users)
 	if user.Domain == "" {
 		domain := extractDomain(req.Email)
 		c.DB.Exec(`UPDATE users SET domain=$1 WHERE id=$2`, domain, user.ID)
@@ -270,8 +272,10 @@ func (c *AuthController) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		utils.InternalError(w, err)
 		return
 	}
+
+	// FIX BUG #13: check Scan error in UpdateProfile
 	var user models.User
-	c.DB.QueryRow(`
+	if err := c.DB.QueryRow(`
 		SELECT id, name, email,
 		       COALESCE(role,''), COALESCE(department,''),
 		       COALESCE(status,'online'), COALESCE(avatar_url,''),
@@ -280,6 +284,9 @@ func (c *AuthController) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 		FROM users WHERE id=$1`, userID,
 	).Scan(&user.ID, &user.Name, &user.Email,
 		&user.Role, &user.Department, &user.Status,
-		&user.AvatarURL, &user.Phone, &user.UserRole, &user.Bio, &user.Domain)
+		&user.AvatarURL, &user.Phone, &user.UserRole, &user.Bio, &user.Domain); err != nil {
+		utils.InternalError(w, err)
+		return
+	}
 	utils.OK(w, user)
 }

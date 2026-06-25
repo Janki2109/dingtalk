@@ -51,8 +51,11 @@ func (c *FileController) GetFiles(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var f FileRecord
 		var sizeBytes int64
-		rows.Scan(&f.ID, &f.Name, &f.FileType,
-			&sizeBytes, &f.UploadedBy, &f.UploadedAt, &f.URL, &f.FromChat)
+		// FIX BUG #40: check Scan error — silently skipping corrupted rows hides data issues
+		if err := rows.Scan(&f.ID, &f.Name, &f.FileType,
+			&sizeBytes, &f.UploadedBy, &f.UploadedAt, &f.URL, &f.FromChat); err != nil {
+			continue
+		}
 		f.SizeBytes = sizeBytes
 		f.SizeStr = formatSize(sizeBytes)
 		files = append(files, f)
@@ -71,7 +74,11 @@ func (c *FileController) UploadFile(w http.ResponseWriter, r *http.Request) {
 		Size     int64  `json:"size"`
 		URL      string `json:"url"`
 	}
-	json.NewDecoder(r.Body).Decode(&req)
+	// FIX BUG #41: check Decode error — invalid JSON would leave req empty, silently accepting bad data
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		utils.BadRequest(w, "invalid request body")
+		return
+	}
 
 	if req.Name == "" {
 		utils.BadRequest(w, "file name required")

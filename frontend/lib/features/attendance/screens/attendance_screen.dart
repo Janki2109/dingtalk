@@ -1011,7 +1011,12 @@ class _AttendanceScreenState extends State<AttendanceScreen>
                           ))),
                 ]),
               )),
-    );
+    ).whenComplete(() {
+      // FIX BUG #58: dispose all dynamically-created task controllers when popup closes
+      for (final c in tasks) {
+        c.dispose();
+      }
+    });
   }
 
   void _snack(String msg, Color color) {
@@ -1274,7 +1279,10 @@ class _AttendanceScreenState extends State<AttendanceScreen>
               ])),
         );
       }),
-    );
+    ).whenComplete(() {
+      // FIX BUG #64: dispose leave reason controller when modal closes
+      reasonCtrl.dispose();
+    });
   }
 
   String _fmtTime(DateTime dt) {

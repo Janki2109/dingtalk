@@ -15,17 +15,24 @@ func NewApprovalController(db *sql.DB) *ApprovalController { return &ApprovalCon
 func (c *ApprovalController) GetApprovals(w http.ResponseWriter, r *http.Request) {
 	userID := r.Header.Get("X-User-ID")
 
-	// Get user role
+	// FIX BUG #33: check Scan error for userRole
 	var userRole string
-	c.DB.QueryRow(`SELECT COALESCE(user_role,'employee') FROM users WHERE id=$1`, userID).Scan(&userRole)
+	if err := c.DB.QueryRow(
+		`SELECT COALESCE(user_role,'employee') FROM users WHERE id=$1`, userID,
+	).Scan(&userRole); err != nil {
+		utils.InternalError(w, err)
+		return
+	}
+
+	// FIX BUG #34: get user domain for cross-tenant filtering
+	var userDomain string
+	c.DB.QueryRow(`SELECT COALESCE(domain,'') FROM users WHERE id=$1`, userID).Scan(&userDomain)
 
 	var rows *sql.Rows
 	var err error
 
 	if userRole == "admin" {
-		// Admin sees:
-		// 1. Requests sent directly to them (approver_id = admin)
-		// 2. Work reports from ALL employees (approval_type = 'work_report')
+		// FIX BUG #34: admin only sees approvals from their own domain
 		rows, err = c.DB.Query(`
 			SELECT a.id, a.title, a.approval_type, a.requester_id, COALESCE(u1.name,''),
 			       COALESCE(a.approver_id::text,''), COALESCE(u2.name,''),
@@ -33,11 +40,10 @@ func (c *ApprovalController) GetApprovals(w http.ResponseWriter, r *http.Request
 			FROM approvals a
 			LEFT JOIN users u1 ON u1.id = a.requester_id
 			LEFT JOIN users u2 ON u2.id = a.approver_id
-			WHERE a.approver_id = $1
-			   OR a.approval_type = 'work_report'
-			ORDER BY a.created_at DESC`, userID)
+			WHERE (a.approver_id = $1 OR a.approval_type = 'work_report')
+			  AND COALESCE(u1.domain,'') = $2
+			ORDER BY a.created_at DESC`, userID, userDomain)
 	} else {
-		// Employee sees only their own approvals
 		rows, err = c.DB.Query(`
 			SELECT a.id, a.title, a.approval_type, a.requester_id, COALESCE(u1.name,''),
 			       COALESCE(a.approver_id::text,''), COALESCE(u2.name,''),
@@ -58,8 +64,13 @@ func (c *ApprovalController) GetApprovals(w http.ResponseWriter, r *http.Request
 	var approvals []models.Approval
 	for rows.Next() {
 		var a models.Approval
-		rows.Scan(&a.ID, &a.Title, &a.ApprovalType, &a.RequesterID, &a.RequesterName,
-			&a.ApproverID, &a.ApproverName, &a.Description, &a.Status, &a.CreatedAt)
+		// FIX BUG #33: check Scan error in loop
+		if err := rows.Scan(
+			&a.ID, &a.Title, &a.ApprovalType, &a.RequesterID, &a.RequesterName,
+			&a.ApproverID, &a.ApproverName, &a.Description, &a.Status, &a.CreatedAt,
+		); err != nil {
+			continue
+		}
 		approvals = append(approvals, a)
 	}
 	if approvals == nil {
@@ -76,10 +87,17 @@ func (c *ApprovalController) CreateApproval(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// For work reports with no approver, find first admin
+	// FIX BUG #34: get domain of requester to only notify same-domain admins
+	var userDomain string
+	c.DB.QueryRow(`SELECT COALESCE(domain,'') FROM users WHERE id=$1`, userID).Scan(&userDomain)
+
+	// For work reports with no approver, find first admin in same domain
 	if req.ApproverID == "" || req.ApprovalType == "work_report" {
 		var adminID string
-		c.DB.QueryRow(`SELECT id FROM users WHERE LOWER(user_role)='admin' LIMIT 1`).Scan(&adminID)
+		c.DB.QueryRow(
+			`SELECT id FROM users WHERE LOWER(user_role)='admin' AND domain=$1 LIMIT 1`,
+			userDomain,
+		).Scan(&adminID)
 		if adminID != "" {
 			req.ApproverID = adminID
 		}
@@ -97,18 +115,22 @@ func (c *ApprovalController) CreateApproval(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Get requester name
 	var requesterName string
 	c.DB.QueryRow(`SELECT name FROM users WHERE id=$1`, userID).Scan(&requesterName)
 
-	// ✅ For work reports — notify ALL admins
+	// FIX BUG #34: only notify admins in the same domain
 	if req.ApprovalType == "work_report" {
-		adminRows, _ := c.DB.Query(`SELECT id FROM users WHERE LOWER(user_role)='admin'`)
-		if adminRows != nil {
+		adminRows, err := c.DB.Query(
+			`SELECT id FROM users WHERE LOWER(user_role)='admin' AND domain=$1`,
+			userDomain,
+		)
+		if err == nil && adminRows != nil {
 			defer adminRows.Close()
 			for adminRows.Next() {
 				var adminID string
-				adminRows.Scan(&adminID)
+				if scanErr := adminRows.Scan(&adminID); scanErr != nil {
+					continue
+				}
 				c.DB.Exec(`
 					INSERT INTO notifications (user_id, title, body, notification_type)
 					VALUES ($1, $2, $3, 'approval')`,
@@ -119,7 +141,6 @@ func (c *ApprovalController) CreateApproval(w http.ResponseWriter, r *http.Reque
 			}
 		}
 	} else if req.ApproverID != "" {
-		// For leave requests — notify the specific admin
 		c.DB.Exec(`
 			INSERT INTO notifications (user_id, title, body, notification_type)
 			VALUES ($1, $2, $3, 'approval')`,
@@ -149,20 +170,22 @@ func (c *ApprovalController) UpdateStatus(w http.ResponseWriter, r *http.Request
 	}
 	id := parts[len(parts)-2]
 
-	// Get approval info before updating
 	var requesterID, title, approvalType string
 	c.DB.QueryRow(`
 		SELECT requester_id, title, approval_type FROM approvals WHERE id=$1`, id,
 	).Scan(&requesterID, &title, &approvalType)
 
-	// Get admin name
 	var adminName string
 	c.DB.QueryRow(`SELECT name FROM users WHERE id=$1`, userID).Scan(&adminName)
 
-	// Update status
-	c.DB.Exec(`UPDATE approvals SET status=$1, updated_at=NOW() WHERE id=$2`, req.Status, id)
+	// FIX BUG #35: check status update error instead of silently ignoring
+	if _, err := c.DB.Exec(
+		`UPDATE approvals SET status=$1, updated_at=NOW() WHERE id=$2`, req.Status, id,
+	); err != nil {
+		utils.InternalError(w, err)
+		return
+	}
 
-	// Notify the requester about the decision
 	if requesterID != "" && requesterID != userID {
 		var notifTitle, notifMsg string
 		if req.Status == "approved" {

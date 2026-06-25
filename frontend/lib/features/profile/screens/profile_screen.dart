@@ -654,7 +654,13 @@ class _ProfileScreenState extends State<ProfileScreen>
                                     fontWeight: FontWeight.w700,
                                     color: Colors.white)))),
                   ])),
-            ));
+            )).whenComplete(() {
+      // FIX BUG #61: dispose edit profile controllers when modal closes
+      nameCtrl.dispose();
+      bioCtrl.dispose();
+      roleCtrl.dispose();
+      phoneCtrl.dispose();
+    });
   }
 
   void _showChangePassword(BuildContext context) {
@@ -800,7 +806,12 @@ class _ProfileScreenState extends State<ProfileScreen>
                                             strokeWidth: 2))
                                     : const Text('Change Password'))),
                       ]),
-                )));
+                ))).whenComplete(() {
+      // FIX BUG #61: dispose password controllers when modal closes
+      oldCtrl.dispose();
+      newCtrl.dispose();
+      confCtrl.dispose();
+    });
   }
 
   void _showThemeSettings(BuildContext context, AuthProvider auth) =>
@@ -1266,11 +1277,14 @@ class _AIChatScreenState extends State<AIChatScreen> {
       final reply = resp.statusCode == 200
           ? (jsonDecode(resp.body)['reply'] as String? ?? 'No response')
           : 'Error ${resp.statusCode}. Try again.';
+      // FIX BUG #57: guard setState after async — widget may be disposed
+      if (!mounted) return;
       setState(() {
         _messages.add({'role': 'assistant', 'content': reply});
         _loading = false;
       });
     } catch (_) {
+      if (!mounted) return;
       setState(() {
         _messages.add({
           'role': 'assistant',

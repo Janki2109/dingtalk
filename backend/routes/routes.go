@@ -86,19 +86,23 @@ func Setup(db *sql.DB) http.Handler {
 	mux.HandleFunc("POST /api/meetings/{id}/invite", withAuth(meet.InviteParticipants))
 	mux.HandleFunc("GET /api/meetings/{id}/participants", withAuth(meet.GetParticipants))
 	mux.HandleFunc("DELETE /api/meetings/{id}/participants/{userId}", withAuth(meet.RemoveParticipant))
+	mux.HandleFunc("POST /api/meetings/{id}/request", withAuth(meet.RequestMeeting)) // FIX BUG #45
 
 	// ── Tasks ─────────────────────────────────────────────────────────────────
 	mux.HandleFunc("GET /api/tasks", withAuth(task.GetTasks))
 	mux.HandleFunc("POST /api/tasks", withAuth(task.CreateTask))
 	mux.HandleFunc("PATCH /api/tasks/{id}/status", withAuth(task.UpdateStatus))
+	mux.HandleFunc("GET /api/tasks/{id}", withAuth(task.GetTask)) // FIX BUG #46
 
 	// ── Attendance ────────────────────────────────────────────────────────────
 	mux.HandleFunc("GET /api/attendance", withAuth(attend.GetHistory))
+	mux.HandleFunc("GET /api/attendance/admin", withAuth(attend.GetAdminAttendance)) // FIX BUG #43
 	mux.HandleFunc("POST /api/attendance/checkin", withAuth(attend.CheckIn))
 	mux.HandleFunc("POST /api/attendance/checkout", withAuth(attend.CheckOut))
 
 	// ── Notifications ─────────────────────────────────────────────────────────
 	mux.HandleFunc("GET /api/notifications", withAuth(notif.GetNotifications))
+	mux.HandleFunc("GET /api/notifications/unread-count", withAuth(notif.GetUnreadCount)) // FIX BUG #44
 	mux.HandleFunc("PATCH /api/notifications/{id}/read", withAuth(notif.MarkRead))
 	mux.HandleFunc("POST /api/notifications/read-all", withAuth(notif.MarkAllRead))
 

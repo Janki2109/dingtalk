@@ -178,7 +178,8 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
                                       _load();
                                       if (mounted) _showCreated(meeting);
                                     } catch (e) {
-                                      setS(() => loading = false);
+                                      // FIX BUG #68: guard setS with ctx.mounted
+                                      if (ctx.mounted) setS(() => loading = false);
                                       _snack('Failed: $e', AppColors.busy);
                                     }
                                   },
@@ -197,7 +198,10 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
                           )),
                     ]),
               )),
-    );
+    ).whenComplete(() {
+      // FIX BUG #66: dispose host meeting controller when modal closes
+      titleCtrl.dispose();
+    });
   }
 
   void _showSchedule() {
@@ -425,7 +429,8 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
                                             AppColors.online);
                                         if (mounted) _showCreated(meeting);
                                       } catch (e) {
-                                        setS(() => loading = false);
+                                        // FIX BUG #68: guard setS with ctx.mounted
+                                        if (ctx.mounted) setS(() => loading = false);
                                         _snack('Failed: $e', AppColors.busy);
                                       }
                                     },
@@ -448,7 +453,11 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
                       ]),
                 ),
               )),
-    );
+    ).whenComplete(() {
+      // FIX BUG #66: dispose schedule controllers when modal closes
+      titleCtrl.dispose();
+      descCtrl.dispose();
+    });
   }
 
   void _showJoinWithCode() {
@@ -542,7 +551,10 @@ class _AdminMeetingsScreenState extends State<AdminMeetingsScreen> {
                       )),
                 ]),
               )),
-    );
+    ).whenComplete(() {
+      // FIX BUG #66: dispose join code controller when modal closes
+      codeCtrl.dispose();
+    });
   }
 
   void _showCreated(MeetingModel meeting) {

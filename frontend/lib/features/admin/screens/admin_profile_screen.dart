@@ -436,7 +436,13 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
           ],
         )),
       ),
-    );
+    ).whenComplete(() {
+      // FIX BUG #65: dispose edit profile controllers when modal closes
+      nameCtrl.dispose();
+      bioCtrl.dispose();
+      roleCtrl.dispose();
+      phoneCtrl.dispose();
+    });
   }
 
   void _showChangePassword(BuildContext context) {
@@ -580,7 +586,12 @@ class _AdminProfileScreenState extends State<AdminProfileScreen> {
                           )),
                     ]),
               )),
-    );
+    ).whenComplete(() {
+      // FIX BUG #65: dispose password controllers when modal closes
+      oldCtrl.dispose();
+      newCtrl.dispose();
+      confCtrl.dispose();
+    });
   }
 
   void _showThemeSettings(BuildContext context, AuthProvider auth) {

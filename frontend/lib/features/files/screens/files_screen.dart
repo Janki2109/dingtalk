@@ -335,14 +335,12 @@ class _FileCard extends StatelessWidget {
     }
   }
 
+  // FIX BUG #63: use tryParse instead of parse+catch — no exceptions for control flow
   String _formatDate(String raw) {
-    try {
-      final dt = DateTime.parse(raw).toLocal();
-      final months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-      return '${months[dt.month - 1]} ${dt.day}, ${dt.year}';
-    } catch (_) {
-      return raw.length > 10 ? raw.substring(0, 10) : raw;
-    }
+    final dt = DateTime.tryParse(raw)?.toLocal();
+    if (dt == null) return raw.length > 10 ? raw.substring(0, 10) : raw;
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    return '${months[dt.month - 1]} ${dt.day}, ${dt.year}';
   }
 
   Future<void> _openFile(BuildContext context) async {

@@ -1,9 +1,11 @@
 package websocket
 
 import (
+	"crypto/rand"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net/http"
 	"sync"
 	"time"
@@ -28,7 +30,13 @@ func CreateInstantMeeting(w http.ResponseWriter, r *http.Request) {
 		Title     string `json:"title"`
 		MeetingID string `json:"meeting_id"`
 	}
-	json.NewDecoder(r.Body).Decode(&req)
+	// FIX BUG #29: check Decode error in CreateInstantMeeting
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid request body"})
+		return
+	}
 	if req.Title == "" {
 		req.Title = "My Meeting"
 	}
@@ -91,7 +99,13 @@ func JoinWaitingRoom(w http.ResponseWriter, r *http.Request) {
 		UserID    string `json:"user_id"`
 		UserName  string `json:"user_name"`
 	}
-	json.NewDecoder(r.Body).Decode(&req)
+	// FIX BUG #29: check Decode error in JoinWaitingRoom
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid request body"})
+		return
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -244,7 +258,13 @@ func AdmitParticipant(w http.ResponseWriter, r *http.Request) {
 		UserID    string `json:"user_id"`
 		Action    string `json:"action"`
 	}
-	json.NewDecoder(r.Body).Decode(&req)
+	// FIX BUG #29: check Decode error in AdmitParticipant
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid request body"})
+		return
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -279,7 +299,13 @@ func EndMeeting(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		MeetingID string `json:"meeting_id"`
 	}
-	json.NewDecoder(r.Body).Decode(&req)
+	// FIX BUG #29: check Decode error in EndMeeting
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "invalid request body"})
+		return
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -299,19 +325,19 @@ func roomCORS(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type,Authorization")
 }
 
-// ── newRoomID — unique name to avoid conflict with signaling.go ──────────────
+// ── newRoomID — FIX BUG #36: crypto/rand replaces time-based predictable ID ──
 func newRoomID() string {
-	b := make([]byte, 6)
-	now := time.Now().UnixNano()
+	const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+	b := make([]byte, 8)
 	for i := range b {
-		b[i] = byte(now >> uint(i*8))
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(chars))))
+		if err != nil {
+			b[i] = chars[0]
+			continue
+		}
+		b[i] = chars[n.Int64()]
 	}
-	chars := "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-	result := make([]byte, 6)
-	for i, v := range b {
-		result[i] = chars[int(v)%32]
-	}
-	return string(result)
+	return string(b)
 }
 
 // keep sql import used

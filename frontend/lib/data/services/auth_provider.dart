@@ -26,11 +26,16 @@ class AuthProvider extends ChangeNotifier {
   bool get isAdmin => _user?.isAdmin ?? false;
   bool get isEmployee => _user?.isEmployee ?? true;
 
-  void updateTheme({Color? color, double? fontSize, double? brightness}) {
+  // FIX BUG #59: persist theme settings so they survive app restart
+  void updateTheme({Color? color, double? fontSize, double? brightness}) async {
     if (color != null) _themeColor = color;
     if (fontSize != null) _fontSize = fontSize;
     if (brightness != null) _brightness = brightness;
     notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('theme_color', _themeColor.toARGB32());
+    await prefs.setDouble('font_size', _fontSize);
+    await prefs.setDouble('brightness', _brightness);
   }
 
   void updateUser(UserModel user) {
@@ -114,6 +119,14 @@ class AuthProvider extends ChangeNotifier {
 
   Future<void> tryAutoLogin() async {
     final prefs = await SharedPreferences.getInstance();
+    // FIX BUG #59: restore persisted theme settings on startup
+    final savedColor = prefs.getInt('theme_color');
+    if (savedColor != null) _themeColor = Color(savedColor);
+    final savedFontSize = prefs.getDouble('font_size');
+    if (savedFontSize != null) _fontSize = savedFontSize;
+    final savedBrightness = prefs.getDouble('brightness');
+    if (savedBrightness != null) _brightness = savedBrightness;
+
     final token = prefs.getString(AppConstants.tokenKey);
     if (token == null) return;
     try {

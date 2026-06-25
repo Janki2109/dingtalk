@@ -1,5 +1,17 @@
 import 'package:flutter/material.dart';
 
+// FIX BUG #47-53: helper to safely parse DateTime — never throws
+DateTime _parseDate(dynamic value, [DateTime? fallback]) {
+  if (value == null) return fallback ?? DateTime.now();
+  if (value is DateTime) return value;
+  return DateTime.tryParse(value.toString()) ?? fallback ?? DateTime.now();
+}
+
+DateTime? _parseDateNullable(dynamic value) {
+  if (value == null) return null;
+  return DateTime.tryParse(value.toString());
+}
+
 class UserModel {
   final String id, name, email, role, department, status;
   final String avatarUrl, phone, userRole, bio;
@@ -56,10 +68,9 @@ class UserModel {
         status: j['status'] ?? 'offline',
         avatarUrl: j['avatar_url'] ?? '',
         phone: j['phone'] ?? '',
-        userRole: j['user_role'] ?? j['role'] ?? 'employee', // ✅ FIXED
+        userRole: j['user_role'] ?? j['role'] ?? 'employee',
         bio: j['bio'] ?? '',
-        lastSeen:
-            j['last_seen'] != null ? DateTime.tryParse(j['last_seen']) : null,
+        lastSeen: _parseDateNullable(j['last_seen']),
       );
 }
 
@@ -90,9 +101,8 @@ class ChatModel {
         isPinned: j['is_pinned'] ?? false,
         isMuted: j['is_muted'] ?? false,
         unreadCount: j['unread_count'] ?? 0,
-        lastTime: j['last_time'] != null
-            ? DateTime.parse(j['last_time'])
-            : DateTime.now(),
+        // FIX BUG #47: use tryParse instead of parse — no crash on bad date
+        lastTime: _parseDate(j['last_time']),
       );
 }
 
@@ -125,11 +135,10 @@ class MessageModel {
         messageType: j['message_type'] ?? 'text',
         fileUrl: j['file_url'] ?? '',
         fileName: j['file_name'] ?? '',
-        senderAvatarUrl: j['sender_avatar'] ?? '',
+        senderAvatarUrl: j['sender_avatar_url'] ?? j['sender_avatar'] ?? '',
         isRead: j['is_read'] ?? false,
-        createdAt: j['created_at'] != null
-            ? DateTime.parse(j['created_at'])
-            : DateTime.now(),
+        // FIX BUG #48: use tryParse — no crash on bad date
+        createdAt: _parseDate(j['created_at']),
       );
 }
 
@@ -165,15 +174,13 @@ class MeetingModel {
         meetingLink: j['meeting_link'] ?? '',
         code: j['code'] ?? '',
         inviteLink: j['invite_link'] ?? j['meeting_link'] ?? '',
-        startTime: j['start_time'] != null
-            ? DateTime.parse(j['start_time'])
-            : DateTime.now(),
-        endTime: j['end_time'] != null
-            ? DateTime.parse(j['end_time'])
-            : DateTime.now().add(const Duration(hours: 1)),
-        createdAt: j['created_at'] != null
-            ? DateTime.parse(j['created_at'])
-            : DateTime.now(),
+        // FIX BUG #49: use tryParse for all 3 DateTime fields
+        startTime: _parseDate(j['start_time']),
+        endTime: _parseDate(
+          j['end_time'],
+          DateTime.now().add(const Duration(hours: 1)),
+        ),
+        createdAt: _parseDate(j['created_at']),
         participants: (j['participants'] as List?)
                 ?.map((p) => UserModel.fromJson(p))
                 .toList() ??
@@ -229,12 +236,12 @@ class TaskModel {
         creatorName: j['creator_name'] ?? '',
         isMine: j['is_mine'] ?? false,
         iCreated: j['i_created'] ?? false,
-        dueDate: j['due_date'] != null
-            ? DateTime.parse(j['due_date'])
-            : DateTime.now().add(const Duration(days: 7)),
-        createdAt: j['created_at'] != null
-            ? DateTime.parse(j['created_at'])
-            : DateTime.now(),
+        // FIX BUG #50: use tryParse for both DateTime fields
+        dueDate: _parseDate(
+          j['due_date'],
+          DateTime.now().add(const Duration(days: 7)),
+        ),
+        createdAt: _parseDate(j['created_at']),
       );
 
   bool get isOverdue =>
@@ -263,10 +270,10 @@ class AttendanceModel {
         userId: j['user_id'] ?? '',
         status: j['status'] ?? 'absent',
         location: j['location'] ?? '',
-        date: j['date'] != null ? DateTime.parse(j['date']) : DateTime.now(),
-        checkIn: j['check_in'] != null ? DateTime.parse(j['check_in']) : null,
-        checkOut:
-            j['check_out'] != null ? DateTime.parse(j['check_out']) : null,
+        // FIX BUG #51: use tryParse for all 3 DateTime fields
+        date: _parseDate(j['date']),
+        checkIn: _parseDateNullable(j['check_in']),
+        checkOut: _parseDateNullable(j['check_out']),
       );
 }
 
@@ -300,9 +307,8 @@ class NotificationModel {
         type: j['notification_type'] ?? 'system',
         isRead: j['is_read'] ?? false,
         actionId: j['action_id'] ?? '',
-        createdAt: j['created_at'] != null
-            ? DateTime.parse(j['created_at'])
-            : DateTime.now(),
+        // FIX BUG #52: use tryParse — no crash on bad date
+        createdAt: _parseDate(j['created_at']),
       );
 }
 
@@ -341,8 +347,7 @@ class ApprovalModel {
         approverName: j['approver_name'] ?? '',
         description: j['description'] ?? '',
         status: j['status'] ?? 'pending',
-        createdAt: j['created_at'] != null
-            ? DateTime.parse(j['created_at'])
-            : DateTime.now(),
+        // FIX BUG #53: use tryParse — no crash on bad date
+        createdAt: _parseDate(j['created_at']),
       );
 }

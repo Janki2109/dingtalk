@@ -657,6 +657,14 @@ class _AddEventSheetState extends State<_AddEventSheet> {
   final _titleCtrl = TextEditingController();
   final _descCtrl = TextEditingController();
   String _type = 'Meeting';
+
+  @override
+  void dispose() {
+    // FIX BUG #60: dispose controllers to prevent memory leak
+    _titleCtrl.dispose();
+    _descCtrl.dispose();
+    super.dispose();
+  }
   TimeOfDay _startTime = TimeOfDay.now();
   TimeOfDay _endTime = TimeOfDay(
       hour: (TimeOfDay.now().hour + 1) % 24, minute: TimeOfDay.now().minute);

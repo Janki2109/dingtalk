@@ -336,7 +336,11 @@ class _TasksScreenState extends State<TasksScreen>
                       const SizedBox(height: 16),
                     ])),
               )),
-    );
+    ).whenComplete(() {
+      // FIX BUG #67: dispose approval controllers when modal closes
+      titleCtrl.dispose();
+      descCtrl.dispose();
+    });
   }
 
   @override

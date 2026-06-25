@@ -1,11 +1,15 @@
 package middleware
 
 import (
+	"errors"
+	"log"
 	"net/http"
-	"os"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
+
+	"dingtalk/config"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -40,6 +44,14 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
+// FIX BUG #37: use config.App.JWTSecret — consistent with rest of app config
+func getJWTSecret() []byte {
+	if config.App.JWTSecret == "" {
+		log.Fatal("FATAL: JWT_SECRET is not configured")
+	}
+	return []byte(config.App.JWTSecret)
+}
+
 func GenerateToken(userID, email string) (string, error) {
 	claims := Claims{
 		UserID: userID,
@@ -50,17 +62,25 @@ func GenerateToken(userID, email string) (string, error) {
 		},
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString([]byte(os.Getenv("JWT_SECRET")))
+	return token.SignedString(getJWTSecret())
 }
 
 func ValidateToken(tokenStr string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenStr, &Claims{}, func(t *jwt.Token) (interface{}, error) {
-		return []byte(os.Getenv("JWT_SECRET")), nil
+		// Enforce HMAC algorithm — reject alg:none attacks
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, errors.New("unexpected signing method")
+		}
+		return getJWTSecret(), nil
 	})
 	if err != nil || !token.Valid {
-		return nil, err
+		return nil, errors.New("invalid or expired token")
 	}
-	return token.Claims.(*Claims), nil
+	claims, ok := token.Claims.(*Claims)
+	if !ok {
+		return nil, errors.New("invalid token claims")
+	}
+	return claims, nil
 }
 
 func Auth(next http.Handler) http.Handler {
@@ -81,7 +101,7 @@ func Auth(next http.Handler) http.Handler {
 	})
 }
 
-// ── FIX BUG 29: Rate Limiter ──────────────────────────────────────────────────
+// ── Rate Limiter ──────────────────────────────────────────────────────────────
 type rateLimiter struct {
 	mu       sync.Mutex
 	attempts map[string][]time.Time
@@ -91,8 +111,35 @@ type rateLimiter struct {
 
 var loginLimiter = &rateLimiter{
 	attempts: make(map[string][]time.Time),
-	limit:    10,          // max 10 attempts
-	window:   time.Minute, // per minute per IP
+	limit:    10,
+	window:   time.Minute,
+}
+
+func init() {
+	// FIX BUG #6: periodically evict old IPs to prevent memory leak
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			loginLimiter.mu.Lock()
+			cutoff := time.Now().Add(-loginLimiter.window)
+			for ip, times := range loginLimiter.attempts {
+				var recent []time.Time
+				for _, t := range times {
+					if t.After(cutoff) {
+						recent = append(recent, t)
+					}
+				}
+				if len(recent) == 0 {
+					// FIX BUG #6: delete IPs with no recent attempts
+					delete(loginLimiter.attempts, ip)
+				} else {
+					loginLimiter.attempts[ip] = recent
+				}
+			}
+			loginLimiter.mu.Unlock()
+		}
+	}()
 }
 
 func (rl *rateLimiter) allow(ip string) bool {
@@ -111,15 +158,38 @@ func (rl *rateLimiter) allow(ip string) bool {
 	return len(recent) <= rl.limit
 }
 
+// FIX BUG #7: validate X-Forwarded-For instead of blindly trusting it
 func getIP(r *http.Request) string {
-	ip := r.Header.Get("X-Forwarded-For")
-	if ip != "" {
-		return strings.Split(ip, ",")[0]
+	forwarded := r.Header.Get("X-Forwarded-For")
+	if forwarded != "" {
+		// Take first IP and validate it is a real IP
+		candidate := strings.TrimSpace(strings.Split(forwarded, ",")[0])
+		if _, err := netip.ParseAddr(candidate); err == nil {
+			return candidate
+		}
 	}
-	return r.RemoteAddr
+	// Fall back to RemoteAddr (strip port)
+	addr := r.RemoteAddr
+	if host, _, err := splitHostPort(addr); err == nil {
+		return host
+	}
+	return addr
 }
 
-// RateLimit wraps a handler — use this on /auth/login route
+func splitHostPort(addr string) (string, string, error) {
+	// handles both IPv4 and IPv6
+	lastColon := strings.LastIndex(addr, ":")
+	if lastColon < 0 {
+		return addr, "", nil
+	}
+	host := addr[:lastColon]
+	port := addr[lastColon+1:]
+	// IPv6 addresses are wrapped in brackets
+	host = strings.Trim(host, "[]")
+	return host, port, nil
+}
+
+// RateLimit wraps a handler — use on /auth/login route
 func RateLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := getIP(r)

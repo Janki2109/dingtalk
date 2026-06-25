@@ -34,8 +34,9 @@ class ApiService {
   static String _parseError(http.Response r) {
     try {
       final body = jsonDecode(r.body);
-      if (body is Map)
+      if (body is Map) {
         return body['error'] ?? body['message'] ?? 'Error ${r.statusCode}';
+      }
     } catch (_) {}
     return 'Error ${r.statusCode}';
   }
@@ -78,19 +79,26 @@ class ApiService {
       _post('/auth/login', {'email': email, 'password': password});
 
   static Future<Map<String, dynamic>> register(
-          String name, String email, String password, String role, String dept,
-          {String userRole = 'employee'}) =>
+    String name,
+    String email,
+    String password,
+    String role,
+    String dept, {
+    String userRole = 'employee',
+  }) =>
       _post('/auth/register', {
         'name': name,
         'email': email,
         'password': password,
         'role': role,
         'department': dept,
-        'user_role': userRole
+        'user_role': userRole,
       });
 
   static Future<UserModel> getMe() async {
     final d = await _get('/auth/me');
+    // FIX BUG #55: safe cast — d might not be a Map on error
+    if (d is! Map<String, dynamic>) throw Exception('Unexpected response');
     return UserModel.fromJson(d);
   }
 
@@ -114,16 +122,21 @@ class ApiService {
   static Future<String> createDirectChat(String otherUserId) async {
     final d = await _post('/chats', {
       'is_group': false,
-      'member_ids': [otherUserId]
+      'member_ids': [otherUserId],
     });
-    return d['id'] as String;
+    // FIX BUG #55: safe cast instead of force cast
+    return (d['id'] ?? '').toString();
   }
 
   static Future<String> createGroupChat(
       String name, List<String> memberIds) async {
-    final d = await _post(
-        '/chats', {'name': name, 'is_group': true, 'member_ids': memberIds});
-    return d['id'] as String;
+    final d = await _post('/chats', {
+      'name': name,
+      'is_group': true,
+      'member_ids': memberIds,
+    });
+    // FIX BUG #55: safe cast instead of force cast
+    return (d['id'] ?? '').toString();
   }
 
   static Future<List<MessageModel>> getMessages(String chatId) async {
@@ -131,8 +144,13 @@ class ApiService {
     return list.map((j) => MessageModel.fromJson(j)).toList();
   }
 
-  static Future<MessageModel> sendMessage(String chatId, String content,
-      {String type = 'text', String? fileUrl, String? fileName}) async {
+  static Future<MessageModel> sendMessage(
+    String chatId,
+    String content, {
+    String type = 'text',
+    String? fileUrl,
+    String? fileName,
+  }) async {
     final d = await _post('/chats/$chatId/messages', {
       'chat_id': chatId,
       'content': content,
@@ -182,7 +200,11 @@ class ApiService {
     final token = await getToken();
     if (token == null) throw Exception('Not logged in');
     final d = await _get('/meetingcode/${code.toUpperCase().trim()}');
-    return MeetingModel.fromJson(d as Map<String, dynamic>);
+    // FIX BUG #56: safe cast — backend may return error body not a Map
+    if (d is! Map<String, dynamic>) {
+      throw Exception('Meeting not found');
+    }
+    return MeetingModel.fromJson(d);
   }
 
   static Future<void> updateMeetingStatus(String id, String status) =>
@@ -199,7 +221,6 @@ class ApiService {
     }
   }
 
-  // FIX BUG 13: use correct DELETE path matching backend route
   static Future<void> removeParticipant(String meetingId, String userId) async {
     await _delete('/meetings/$meetingId/participants/$userId');
   }
@@ -225,7 +246,6 @@ class ApiService {
     return list.map((j) => TaskModel.fromJson(j)).toList();
   }
 
-  // FIX BUG 15: return created task so caller gets server-assigned ID and defaults
   static Future<Map<String, dynamic>> createTask(Map<String, dynamic> body) =>
       _post('/tasks', body);
 
@@ -243,10 +263,10 @@ class ApiService {
     return AttendanceModel.fromJson(d);
   }
 
-  // FIX BUG 16: return attendance record so UI gets server-side checkout timestamp
-  static Future<AttendanceModel> checkOut() async {
-    final d = await _post('/attendance/checkout', {});
-    return AttendanceModel.fromJson(d);
+  // FIX BUG #54: checkOut backend returns {message, time} not AttendanceModel
+  // Return the raw response and let caller handle it
+  static Future<Map<String, dynamic>> checkOut() async {
+    return await _post('/attendance/checkout', {});
   }
 
   // ── Notifications ─────────────────────────────────────────────────────────
@@ -257,6 +277,7 @@ class ApiService {
 
   static Future<void> markNotificationRead(String id) =>
       _patch('/notifications/$id/read', {});
+
   static Future<void> markAllNotificationsRead() =>
       _post('/notifications/read-all', {});
 
@@ -275,7 +296,6 @@ class ApiService {
     }
   }
 
-  // FIX BUG 14: removed useless PUT fallback — only PATCH route exists
   static Future<void> updateApprovalStatus(String id, String status) async {
     await _patch('/approvals/$id/status', {'status': status});
   }
@@ -287,13 +307,16 @@ class ApiService {
   }
 
   static Future<Map<String, dynamic>> uploadFile(
-      String name, String fileType, int size,
-      {String url = ''}) async {
+    String name,
+    String fileType,
+    int size, {
+    String url = '',
+  }) async {
     return await _post('/files', {
       'name': name,
       'file_type': fileType,
       'size': size,
-      if (url.isNotEmpty) 'url': url
+      if (url.isNotEmpty) 'url': url,
     });
   }
 

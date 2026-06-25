@@ -1,9 +1,10 @@
 package controllers
 
 import (
+	"crypto/rand"
 	"database/sql"
 	"fmt"
-	"math/rand"
+	"math/big"
 	"net/http"
 	"strings"
 	"time"
@@ -18,13 +19,17 @@ func NewMeetingController(db *sql.DB) *MeetingController {
 	return &MeetingController{DB: db}
 }
 
-// FIX BUG 01: use local rand source — no global state, no data race
+// FIX BUG #4: use crypto/rand — time-seeded rand is predictable
 func generateCode() string {
 	const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	b := make([]byte, 6)
 	for i := range b {
-		b[i] = chars[r.Intn(len(chars))]
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(chars))))
+		if err != nil {
+			b[i] = chars[0]
+			continue
+		}
+		b[i] = chars[n.Int64()]
 	}
 	return string(b)
 }
@@ -32,6 +37,11 @@ func generateCode() string {
 func (c *MeetingController) notifyMeeting(userID, title, body, meetingID string) {
 	c.DB.Exec(`INSERT INTO notifications (user_id, title, body, notification_type, action_id)
 		VALUES ($1, $2, $3, 'meeting', $4)`, userID, title, body, meetingID)
+}
+
+type meetingRow struct {
+	id, title, desc, orgID, orgName, link, code, status string
+	start, end, created                                  time.Time
 }
 
 func (c *MeetingController) GetMeetings(w http.ResponseWriter, r *http.Request) {
@@ -56,45 +66,62 @@ func (c *MeetingController) GetMeetings(w http.ResponseWriter, r *http.Request) 
 		utils.InternalError(w, err)
 		return
 	}
-	defer rows.Close()
 
-	var meetings []map[string]interface{}
+	// FIX BUG #27: collect all meetings first, then batch-query participants
+	// to avoid N+1 (one participant query per meeting)
+	var mRows []meetingRow
 	for rows.Next() {
-		var id, title, desc, orgID, orgName, link, code, status string
-		var start, end, created time.Time
-		if err := rows.Scan(&id, &title, &desc, &orgID, &orgName,
-			&start, &end, &link, &code, &status, &created); err != nil {
+		var m meetingRow
+		if err := rows.Scan(&m.id, &m.title, &m.desc, &m.orgID, &m.orgName,
+			&m.start, &m.end, &m.link, &m.code, &m.status, &m.created); err != nil {
 			continue
 		}
+		mRows = append(mRows, m)
+	}
+	rows.Close()
 
-		pRows, _ := c.DB.Query(`
-			SELECT u.id, COALESCE(u.name,''), COALESCE(u.avatar_url,''), COALESCE(u.status,'offline')
+	participantsByMeeting := make(map[string][]map[string]interface{})
+	if len(mRows) > 0 {
+		ids := make([]interface{}, len(mRows))
+		placeholders := make([]string, len(mRows))
+		for i, m := range mRows {
+			ids[i] = m.id
+			placeholders[i] = fmt.Sprintf("$%d", i+1)
+		}
+		pQuery := fmt.Sprintf(`
+			SELECT mp.meeting_id, u.id, COALESCE(u.name,''), COALESCE(u.avatar_url,''), COALESCE(u.status,'offline')
 			FROM meeting_participants mp
 			JOIN users u ON u.id = mp.user_id
-			WHERE mp.meeting_id = $1`, id)
-		var parts []map[string]interface{}
-		if pRows != nil {
+			WHERE mp.meeting_id IN (%s)`, strings.Join(placeholders, ","))
+		pRows, err := c.DB.Query(pQuery, ids...)
+		if err == nil {
+			defer pRows.Close()
 			for pRows.Next() {
-				var pID, pName, pAvatar, pStatus string
-				pRows.Scan(&pID, &pName, &pAvatar, &pStatus)
-				parts = append(parts, map[string]interface{}{
+				var meetID, pID, pName, pAvatar, pStatus string
+				if err := pRows.Scan(&meetID, &pID, &pName, &pAvatar, &pStatus); err != nil {
+					continue
+				}
+				participantsByMeeting[meetID] = append(participantsByMeeting[meetID], map[string]interface{}{
 					"id": pID, "name": pName, "avatar_url": pAvatar, "status": pStatus,
 				})
 			}
-			pRows.Close()
 		}
+	}
+
+	var meetings []map[string]interface{}
+	for _, m := range mRows {
+		parts := participantsByMeeting[m.id]
 		if parts == nil {
 			parts = []map[string]interface{}{}
 		}
-
-		jitsiLink := fmt.Sprintf("https://meet.jit.si/WorkspacePro-%s", code)
+		jitsiLink := fmt.Sprintf("https://meet.jit.si/WorkspacePro-%s", m.code)
 		meetings = append(meetings, map[string]interface{}{
-			"id": id, "title": title, "description": desc,
-			"organizer_id": orgID, "organizer": orgName,
-			"start_time": start, "end_time": end,
-			"meeting_link": link, "code": code,
-			"invite_link": jitsiLink,
-			"status":      status, "created_at": created,
+			"id": m.id, "title": m.title, "description": m.desc,
+			"organizer_id": m.orgID, "organizer": m.orgName,
+			"start_time": m.start, "end_time": m.end,
+			"meeting_link": m.link, "code": m.code,
+			"invite_link":  jitsiLink,
+			"status":       m.status, "created_at": m.created,
 			"participants": parts,
 		})
 	}
